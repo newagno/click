@@ -1,0 +1,38 @@
+name: Daily Incrypted Claim
+
+on:
+  schedule:
+    - cron: '15 */3 * * *' # Запуск кожні 3 години
+  workflow_dispatch:      # Можливість запуску кнопкою вручну
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install dependencies
+        run: |
+          pip install -r requirements.txt
+
+      - name: Install Chrome
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y google-chrome-stable
+
+      - name: Run script
+        env:
+          INCRYPTED_EMAIL: ${{ secrets.INCRYPTED_EMAIL }}
+          INCRYPTED_PASSWORD: ${{ secrets.INCRYPTED_PASSWORD }}
+          TG_BOT_TOKEN: ${{ secrets.TG_BOT_TOKEN }}
+          TG_CHAT_ID: ${{ secrets.TG_CHAT_ID }}
+          RESIDENTIAL_PROXY: ${{ secrets.RESIDENTIAL_PROXY }}
+        run: |
+          # xvfb-run імітує дисплей для браузера в headless режимі
+          xvfb-run python src/main.py

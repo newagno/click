@@ -1,0 +1,3 @@
+seleniumbase>=4.27.0
+requests
+python-dotenv
