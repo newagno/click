@@ -11,6 +11,23 @@ def get_binary_path():
     chrome_path = "/usr/bin/google-chrome"
     return chrome_path if os.path.exists(chrome_path) else None
 
+def bypass_turnstile(sb):
+    if sb.is_element_visible('iframe[src*="turnstile"]'):
+        print("DEBUG: Cloudflare Turnstile detected. Attempting to bypass...")
+        try:
+            sb.switch_to_frame('iframe[src*="turnstile"]')
+            sb.click('span.mark')
+            sb.switch_to_default_content()
+            sb.sleep(5)
+            return True
+        except Exception as e:
+            print(f"DEBUG: Could not click Turnstile: {e}")
+            try:
+                sb.switch_to_default_content()
+            except:
+                pass
+    return False
+
 class IncryptedBrowser:
     def __init__(self, email, password, proxy):
         self.email = email
@@ -33,6 +50,15 @@ class IncryptedBrowser:
             sb.uc_open_with_reconnect("https://incrypted.com/ua/account/", 10)
             sb.sleep(3)
             
+            # Check for Turnstile immediately on page load
+            bypass_turnstile(sb)
+            
+            # Wait a moment for page to settle after potential Turnstile bypass
+            for _ in range(5):
+                if sb.is_element_visible("#llms_login") or sb.is_element_visible(".account-checkin-balance-section") or sb.is_element_visible(".drag-daily-check"):
+                    break
+                sb.sleep(2)
+            
             # 3. Fill in the login form if present
             if sb.is_element_visible("#llms_login"):
                 print("DEBUG: Login form detected. Logging in...")
@@ -43,17 +69,9 @@ class IncryptedBrowser:
                 # Precise login button selector by unique ID to avoid multiple buttons conflict
                 sb.click("#llms_login_button")
                 sb.sleep(8)
-            
-            # 4. Check for Cloudflare Turnstile / challenge if present
-            if sb.is_element_visible('iframe[src*="turnstile"]'):
-                print("DEBUG: Cloudflare Turnstile detected after login. Attempting to bypass...")
-                try:
-                    sb.switch_to_frame('iframe[src*="turnstile"]')
-                    sb.click('span.mark')
-                    sb.switch_to_default_content()
-                    sb.sleep(5)
-                except Exception as e:
-                    print(f"DEBUG: Could not click Turnstile: {e}")
+                
+                # Check for Turnstile again after submitting login
+                bypass_turnstile(sb)
             
             # 5. Verify we successfully reached the account page
             current_url = sb.get_current_url()
