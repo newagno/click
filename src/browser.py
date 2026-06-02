@@ -58,10 +58,18 @@ class IncryptedBrowser:
             # 5. Verify we successfully reached the account page
             current_url = sb.get_current_url()
             if "account" not in current_url:
+                sb.save_screenshot("debug_error.png")
                 return "error|Failed to reach account page, stuck at login or Cloudflare?"
             
             # If the check-in section isn't visible, check if we had invalid credentials
             if not sb.is_element_visible(".account-chekin-balance-section"):
+                sb.save_screenshot("debug_error.png")
+                try:
+                    with open("debug_source.html", "w", encoding="utf-8") as f:
+                        f.write(sb.get_page_source())
+                except:
+                    pass
+                
                 body_text = sb.get_text("body")
                 if "Неправильний пароль" in body_text or "Невірний" in body_text or "Incorrect password" in body_text:
                     return "error|Incorrect credentials"
