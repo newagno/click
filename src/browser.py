@@ -62,7 +62,17 @@ class IncryptedBrowser:
                 return "error|Failed to reach account page, stuck at login or Cloudflare?"
             
             # If the check-in section isn't visible, check if we had invalid credentials
-            if not sb.is_element_visible(".account-chekin-balance-section"):
+            # We check multiple selectors (including typos and child components) for maximum robustness
+            section_selectors = [
+                ".account-checkin-balance-section",
+                ".account-chekin-balance-section",
+                ".drag-daily-check",
+                ".inc-btn-checkin-disabled",
+                "#inc-drag-to-collect"
+            ]
+            section_visible = any(sb.is_element_visible(sel) for sel in section_selectors)
+            
+            if not section_visible:
                 sb.save_screenshot("debug_error.png")
                 try:
                     with open("debug_source.html", "w", encoding="utf-8") as f:
