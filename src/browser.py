@@ -90,6 +90,15 @@ class IncryptedBrowser:
         print(f"DEBUG: Proxy configured: {'YES' if self.proxy else 'NO'}")
 
         with SB(uc=True, headless=headless_mode, proxy=self.proxy, binary_location=binary_location) as sb:
+            # ── Connection & Proxy Diagnosis ──────────────────────────────
+            print("DEBUG: Testing connection and checking public IP...")
+            try:
+                # Use a fast IP checker
+                sb.open("https://api.ipify.org?format=json")
+                ip_text = sb.get_text("body")
+                print(f"DEBUG: Connection test successful! Response: {ip_text}")
+            except Exception as e:
+                print(f"DEBUG: Connection test failed! The proxy might be offline, blocked, or requiring IP authorization. Error: {e}")
 
             # ── STEP 1: Open the account page ──────────────────────────────
             print("DEBUG: Opening account page...")
