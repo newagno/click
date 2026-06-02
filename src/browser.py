@@ -80,8 +80,10 @@ class IncryptedBrowser:
 
     def execute_claim(self) -> str:
         binary_location = get_binary_path()
-        # On Linux (GitHub Actions) run headless; on Windows show the browser
-        headless_mode = sys.platform != "win32"
+        # IMPORTANT: Always use headless=False.
+        # On Linux (GitHub Actions) we run under xvfb-run which provides a virtual display.
+        # headless=True is detected by Cloudflare and results in a completely empty page.
+        headless_mode = False
 
         print(f"DEBUG: Platform={sys.platform}, headless={headless_mode}, binary={binary_location}")
         print(f"DEBUG: Email configured: {'YES' if self.email else 'NO'}")
