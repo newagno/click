@@ -1,8 +1,6 @@
 import os
 import sys
 from seleniumbase import SB
-from selenium.webdriver.common.action_chains import ActionChains
-from selenium.webdriver.common.by import By
 
 
 def get_binary_path():
@@ -183,30 +181,15 @@ class IncryptedBrowser:
                 return "error|Daily claim section not found on the account dashboard"
 
             # ── STEP 7: Check cooldown / already claimed ───────────────────
-            is_disabled = False
-            try:
-                classes = sb.get_attribute(".drag-daily-check", "class")
-                if "disabled" in classes:
-                    is_disabled = True
-                    print(f"DEBUG: .drag-daily-check classes: {classes}")
-            except Exception as e:
-                print(f"DEBUG: Could not get .drag-daily-check class: {e}")
-
-            cooldown_active = (
-                sb.is_element_visible(".inc-btn-checkin-disabled")
-                or sb.is_element_visible("#checkin-hours")
-                or is_disabled
-            )
+            cooldown_active = sb.is_element_visible(".inc-btn-checkin-disabled")
             print(f"DEBUG: Cooldown active: {cooldown_active}")
 
             if cooldown_active:
                 print("DEBUG: Daily reward already claimed. Parsing cooldown timer...")
                 try:
-                    hours = sb.get_text("#checkin-hours").strip()
-                    minutes = sb.get_text("#checkin-minutes").strip()
-                    seconds = sb.get_text("#checkin-seconds").strip()
-                    print(f"DEBUG: Cooldown timer: {hours}:{minutes}:{seconds}")
-                    return f"cooldown|{hours}:{minutes}:{seconds}"
+                    timer_text = sb.get_text(".inc-btn-checkin-disabled").strip()
+                    print(f"DEBUG: Cooldown timer text: {timer_text}")
+                    return f"cooldown|{timer_text}"
                 except Exception as e:
                     print(f"DEBUG: Could not parse timer: {e}")
                     return "already_claimed"
@@ -214,8 +197,7 @@ class IncryptedBrowser:
             # ── STEP 8: Perform the drag-and-drop swipe to claim ──────────
             print("DEBUG: Daily reward unclaimed. Starting slider drag...")
             
-            # Determine slider selector dynamically (try #locker first, then slider handle container)
-            slider_selector = "#locker" if sb.is_element_visible("#locker") else "#inc-drag-to-collect-slider"
+            slider_selector = "#locker"
             print(f"DEBUG: Using slider selector: {slider_selector}")
             
             try:
@@ -224,18 +206,16 @@ class IncryptedBrowser:
                 # Determine drag distance
                 try:
                     width = sb.execute_script(
-                        "return document.getElementById('inc-drag-to-collect').offsetWidth;"
+                        "return document.querySelector('.inc-swipe-btn') ? document.querySelector('.inc-swipe-btn').offsetWidth : 350;"
                     )
-                    drag_distance = width - 40
+                    drag_distance = width - 20
                 except:
                     drag_distance = 350
                 
                 print(f"DEBUG: Dragging slider by {drag_distance}px...")
                 
-                # Use raw element from standard selenium driver for ActionChains compatibility
-                slider_element = sb.driver.find_element(By.CSS_SELECTOR, slider_selector)
-                actions = ActionChains(sb.driver)
-                actions.click_and_hold(slider_element).move_by_offset(drag_distance, 0).release().perform()
+                # Use SeleniumBase's native JS-based drag to avoid ActionChains Connection Refused error
+                sb.drag_and_drop_with_offset(slider_selector, drag_distance, 0)
                 sb.sleep(5)
 
                 # Verify success
