@@ -1,6 +1,7 @@
 import os
 import sys
 from seleniumbase import SB
+from selenium.webdriver.common.action_chains import ActionChains
 
 
 def get_binary_path():
@@ -218,7 +219,11 @@ class IncryptedBrowser:
                 )
                 drag_distance = width - 40
                 print(f"DEBUG: Dragging slider by {drag_distance}px...")
-                sb.drag_and_drop_by_offset("#inc-drag-to-collect-slider", drag_distance, 0)
+                
+                # Use standard Selenium ActionChains since SeleniumBase doesn't have drag_and_drop_by_offset on BaseCase directly
+                slider_element = sb.find_element("#inc-drag-to-collect-slider")
+                actions = ActionChains(sb.driver)
+                actions.drag_and_drop_by_offset(slider_element, drag_distance, 0).perform()
                 sb.sleep(5)
 
                 classes_after = sb.get_attribute(".drag-daily-check", "class")
