@@ -191,7 +191,22 @@ def claim_daily_reward(max_retries=3):
             error_msg = f"Attempt {attempt + 1} failed: {str(e)}"
             print(error_msg)
             if attempt == max_retries - 1:
-                send_telegram_message(f"❌ <b>Incrypted Bot Error</b>\nFailed after {max_retries} attempts.\nError: {str(e)}")
+                # Smart Alerting: Only send TG message if the last claim is older than 30 hours
+                state = load_state()
+                last_claim_str = state.get("last_claim_time")
+                should_alert = True
+                if last_claim_str:
+                    try:
+                        last_claim_time = datetime.fromisoformat(last_claim_str.replace("Z", "+00:00"))
+                        now = datetime.now(timezone.utc)
+                        if now - last_claim_time < timedelta(hours=30):
+                            should_alert = False
+                            print(f"Skipping Telegram error alert because last claim is recent ({last_claim_str}). Will retry next time.")
+                    except Exception as ex:
+                        print(f"Error parsing last claim time for alert logic: {ex}")
+                
+                if should_alert:
+                    send_telegram_message(f"❌ <b>Incrypted Bot Error</b>\nFailed after {max_retries} attempts.\nError: {str(e)}")
                 return False
             time.sleep(2 ** attempt)
 
