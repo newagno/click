@@ -27,7 +27,7 @@ def log_page_state(sb, label=""):
             "Login form #llms_login": "#llms_login",
             "Login button #llms_login_button": "#llms_login_button",
             ".drag-daily-check": ".drag-daily-check",
-            ".inc-btn-checkin-disabled": ".inc-btn-checkin-disabled",
+            ".inc-btn-checkin-disabled": ".drag-daily-check .inc-btn-checkin-disabled",
             "#inc-drag-to-collect": "#inc-drag-to-collect",
             "#inc-drag-to-collect-slider": "#inc-drag-to-collect-slider",
             "#locker": "#locker",
@@ -126,7 +126,7 @@ class IncryptedBrowser:
                     found = True
                     break
                 if (sb.is_element_visible(".drag-daily-check")
-                        or sb.is_element_visible(".inc-btn-checkin-disabled")
+                        or sb.is_element_visible(".drag-daily-check .inc-btn-checkin-disabled")
                         or sb.is_element_visible("#inc-drag-to-collect")):
                     print(f"DEBUG: Dashboard (claim section) appeared after {i*2}s - already logged in!")
                     found = True
@@ -166,7 +166,7 @@ class IncryptedBrowser:
                 ".account-checkin-balance-section",
                 ".account-chekin-balance-section",
                 ".drag-daily-check",
-                ".inc-btn-checkin-disabled",
+                ".drag-daily-check .inc-btn-checkin-disabled",
                 "#inc-drag-to-collect",
             ]
             section_visible = any(sb.is_element_visible(sel) for sel in section_selectors)
@@ -187,13 +187,13 @@ class IncryptedBrowser:
                 return "error|Daily claim section not found on the account dashboard"
 
             # ── STEP 7: Check cooldown / already claimed ───────────────────
-            cooldown_active = sb.is_element_visible(".inc-btn-checkin-disabled")
+            cooldown_active = sb.is_element_visible(".drag-daily-check .inc-btn-checkin-disabled")
             print(f"DEBUG: Cooldown active: {cooldown_active}")
 
             if cooldown_active:
                 print("DEBUG: Daily reward already claimed. Parsing cooldown timer...")
                 try:
-                    timer_text = sb.get_text(".inc-btn-checkin-disabled").strip()
+                    timer_text = sb.get_text(".drag-daily-check .inc-btn-checkin-disabled").strip()
                     print(f"DEBUG: Cooldown timer text: {timer_text}")
                     return f"cooldown|{timer_text}"
                 except Exception as e:
@@ -230,7 +230,7 @@ class IncryptedBrowser:
                 
                 success = (
                     "disabled" in classes_after 
-                    or sb.is_element_visible(".inc-btn-checkin-disabled")
+                    or sb.is_element_visible(".drag-daily-check .inc-btn-checkin-disabled")
                     or sb.is_element_visible(success_indicator)
                 )
                 
@@ -239,7 +239,7 @@ class IncryptedBrowser:
                     return "claimed"
                 else:
                     sb.sleep(3)
-                    if sb.is_element_visible(".inc-btn-checkin-disabled") or sb.is_element_visible(success_indicator):
+                    if sb.is_element_visible(".drag-daily-check .inc-btn-checkin-disabled") or sb.is_element_visible(success_indicator):
                         return "claimed"
                     return "error|Slider was dragged, but claim state did not update"
             except Exception as e:
