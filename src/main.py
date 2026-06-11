@@ -7,6 +7,12 @@ from dotenv import load_dotenv
 from browser import IncryptedBrowser
 from notifier import send_telegram_message
 
+def set_github_output(name, value):
+    output_file = os.getenv("GITHUB_OUTPUT")
+    if output_file:
+        with open(output_file, "a") as f:
+            f.write(f"{name}={value}\n")
+
 load_dotenv()
 
 # Configuration
@@ -128,6 +134,7 @@ def claim_daily_reward(max_retries=3):
             last_claim_kyiv = last_claim_time.astimezone(get_kyiv_offset(last_claim_time))
             if last_claim_kyiv >= current_cycle_start:
                 print(f"Skipping check: Already claimed in the current cycle (started at {current_cycle_start}). Last claim: {last_claim_kyiv}.")
+                set_github_output("claimed", "true")
                 return True
         except Exception as e:
             print(f"Error checking claim interval: {e}")
@@ -152,6 +159,7 @@ def claim_daily_reward(max_retries=3):
                     f"Успішно зібрано щоденну винагороду!\n"
                     f"🔥 Днів підряд: <b>{streak_count}</b>"
                 )
+                set_github_output("claimed", "true")
                 return True
 
             # Case 2: Already claimed
@@ -170,6 +178,8 @@ def claim_daily_reward(max_retries=3):
                     )
                 else:
                     print(f"Daily reward already claimed (silent mode). Streak: {streak_count}")
+                
+                set_github_output("claimed", "true")
                 return True
             
             # Case 3: Cooldown active

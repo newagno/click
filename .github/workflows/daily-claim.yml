@@ -7,6 +7,7 @@ on:
 
 permissions:
   contents: write
+  actions: write
 
 jobs:
   build:
@@ -34,6 +35,7 @@ jobs:
           sudo apt-get install -y xvfb
 
       - name: Run script
+        id: claim_script
         env:
           INCRYPTED_EMAIL: ${{ secrets.INCRYPTED_EMAIL }}
           INCRYPTED_PASSWORD: ${{ secrets.INCRYPTED_PASSWORD }}
@@ -47,6 +49,14 @@ jobs:
           sleep 2
           # Run script using the virtual display
           python src/main.py
+
+      - name: Disable workflow if claimed
+        if: steps.claim_script.outputs.claimed == 'true'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh workflow disable daily-claim.yml --repo ${{ github.repository }}
+
 
       - name: Commit and push state if changed
         if: always()
