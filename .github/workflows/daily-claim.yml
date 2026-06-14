@@ -2,7 +2,7 @@ name: Daily Incrypted Claim
 
 on:
   schedule:
-    - cron: '*/30 * * * *' # Запуск кожні 30 хвилин
+    - cron: '0 * * * *' # Запуск кожні 60 хвилин (щогодини)
   workflow_dispatch:      # Можливість запуску кнопкою вручну
 
 permissions:
@@ -16,25 +16,90 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v4
 
+      - name: Check claim status
+        id: check_status
+        run: |
+          python -c '
+          import json, os, datetime
+          from datetime import timezone, timedelta
+          
+          def get_kyiv_offset(dt):
+              year = dt.year
+              march_last = datetime.datetime(year, 3, 31, 1, 0, tzinfo=timezone.utc)
+              march_offset = (march_last.weekday() + 1) % 7
+              dst_start = march_last - timedelta(days=march_offset)
+              oct_last = datetime.datetime(year, 10, 31, 1, 0, tzinfo=timezone.utc)
+              oct_offset = (oct_last.weekday() + 1) % 7
+              dst_end = oct_last - timedelta(days=oct_offset)
+              if dst_start <= dt < dst_end:
+                  return timezone(timedelta(hours=3))
+              return timezone(timedelta(hours=2))
+          
+          def get_kyiv_now():
+              now_utc = datetime.datetime.now(timezone.utc)
+              return now_utc.astimezone(get_kyiv_offset(now_utc))
+          
+          def get_cycle_start(dt_kyiv):
+              today_eight = dt_kyiv.replace(hour=8, minute=0, second=0, microsecond=0)
+              if dt_kyiv >= today_eight:
+                  return today_eight
+              return today_eight - timedelta(days=1)
+
+          is_manual = os.getenv("GITHUB_EVENT_NAME") == "workflow_dispatch"
+          if is_manual:
+              print("Manual run, forcing execution.")
+              with open(os.environ["GITHUB_OUTPUT"], "a") as f:
+                  f.write("should_run=true\n")
+              exit(0)
+
+          try:
+              with open("state.json", "r") as f:
+                  state = json.load(f)
+          except Exception:
+              state = {}
+          
+          last_claim_str = state.get("last_claim_time")
+          should_run = "true"
+          if last_claim_str:
+              try:
+                  last_claim_time = datetime.datetime.fromisoformat(last_claim_str.replace("Z", "+00:00"))
+                  last_claim_kyiv = last_claim_time.astimezone(get_kyiv_offset(last_claim_time))
+                  now_kyiv = get_kyiv_now()
+                  current_cycle_start = get_cycle_start(now_kyiv)
+                  if last_claim_kyiv >= current_cycle_start:
+                      should_run = "false"
+                      print(f"Already claimed today. Last claim: {last_claim_kyiv}, current cycle started at: {current_cycle_start}")
+              except Exception as e:
+                  print(f"Error parsing last claim time: {e}")
+          
+          with open(os.environ["GITHUB_OUTPUT"], "a") as f:
+              f.write(f"should_run={should_run}\n")
+          '
+
       - name: Set up Python
+        if: steps.check_status.outputs.should_run == 'true'
         uses: actions/setup-python@v5
         with:
           python-version: '3.11'
 
       - name: Install dependencies
+        if: steps.check_status.outputs.should_run == 'true'
         run: |
           pip install -r requirements.txt
 
       - name: Install Chrome
+        if: steps.check_status.outputs.should_run == 'true'
         run: |
           sudo apt-get update
           sudo apt-get install -y google-chrome-stable
 
       - name: Install Xvfb
+        if: steps.check_status.outputs.should_run == 'true'
         run: |
           sudo apt-get install -y xvfb
 
       - name: Run script
+        if: steps.check_status.outputs.should_run == 'true'
         id: claim_script
         env:
           INCRYPTED_EMAIL: ${{ secrets.INCRYPTED_EMAIL }}
@@ -50,16 +115,8 @@ jobs:
           # Run script using the virtual display
           python src/main.py
 
-      - name: Disable workflow if claimed
-        if: steps.claim_script.outputs.claimed == 'true'
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: |
-          gh workflow disable daily-claim.yml --repo ${{ github.repository }}
-
-
       - name: Commit and push state if changed
-        if: always()
+        if: always() && steps.check_status.outputs.should_run == 'true'
         run: |
           git config --global user.name "github-actions[bot]"
           git config --global user.email "41898282+github-actions[bot]@users.noreply.github.com"
@@ -67,7 +124,7 @@ jobs:
           git diff --quiet && git diff --staged --quiet || (git commit -m "Update claim state [skip ci]" && git push)
 
       - name: Upload debug artifacts
-        if: always()
+        if: always() && steps.check_status.outputs.should_run == 'true'
         uses: actions/upload-artifact@v4
         with:
           name: debug-screenshots
