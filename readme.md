@@ -1,7 +1,8 @@
 # 🤖 Daily Claim Bot (2026 Edition)
 
 Високонадійне, production-ready рішення для автоматичного щоденного збору поінтів **KEY** на сайті [Incrypted Account](https://incrypted.com/ua/account/) з обходом захисту Cloudflare (Turnstile) та інтеграцією сповіщень у Telegram.
-
+ 
+ 
 ---
 
 ## 🚀 Основні переваги та архітектурні рішення
