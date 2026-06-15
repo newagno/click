@@ -2,7 +2,7 @@ name: Daily Incrypted Claim
 
 on:
   schedule:
-    - cron: '0 * * * *' # Запуск кожні 60 хвилин (щогодини)
+    - cron: '*/15 * * * *' # Запуск кожні 15 хвилин для компенсації затримок GitHub
   workflow_dispatch:      # Можливість запуску кнопкою вручну
 
 permissions:
