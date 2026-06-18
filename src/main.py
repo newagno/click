@@ -210,6 +210,10 @@ def claim_daily_reward(max_retries=3):
                     print(f"Daily reward in cooldown: {timer_info} (silent mode). Streak: {streak_count}")
                 return True
 
+            if result.startswith("error"):
+                error_msg = result.split("|", 1)[1] if "|" in result else result
+                raise Exception(error_msg)
+
             raise Exception(f"Received unknown result format: {result}")
 
         except Exception as e:
