@@ -224,23 +224,27 @@ class IncryptedBrowser:
                 sb.drag_and_drop_with_offset(slider_selector, drag_distance, 0)
                 sb.sleep(5)
 
+                # Check for Turnstile after drag
+                print("DEBUG: Checking for Turnstile post-drag...")
+                bypass_turnstile(sb)
+                sb.sleep(3)
+
+                print("DEBUG: Drag completed. Refreshing page to verify server state...")
+                sb.refresh()
+                sb.sleep(5)
+                
                 # Verify success
-                classes_after = sb.get_attribute(".drag-daily-check", "class")
-                success_indicator = ".inc-drag-to-collect-icon-collected"
-                
-                success = (
-                    "disabled" in classes_after 
-                    or sb.is_element_visible(".drag-daily-check .inc-btn-checkin-disabled")
-                    or sb.is_element_visible(success_indicator)
-                )
-                
-                if success:
-                    print("DEBUG: Claim successfully completed!")
+                if sb.is_element_visible(".drag-daily-check .inc-btn-checkin-disabled"):
+                    print("DEBUG: Claim successfully confirmed after refresh!")
                     return "claimed"
                 else:
-                    sb.sleep(3)
-                    if sb.is_element_visible(".drag-daily-check .inc-btn-checkin-disabled") or sb.is_element_visible(success_indicator):
-                        return "claimed"
-                    return "error|Slider was dragged, but claim state did not update"
+                    print("DEBUG: Cooldown timer not found after refresh.")
+                    sb.save_screenshot("debug_error.png")
+                    try:
+                        with open("debug_source.html", "w", encoding="utf-8") as f:
+                            f.write(sb.get_page_source())
+                    except:
+                        pass
+                    return "error|Slider was dragged, but claim state did not persist on the server"
             except Exception as e:
                 return f"error|Failed to drag slider: {str(e)}"
