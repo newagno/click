@@ -2,25 +2,25 @@ name: Daily Incrypted Claim
 
 on:
   schedule:
-    - cron: '*/15 * * * *' # Запуск кожні 15 хвилин для компенсації затримок GitHub
+    - cron: '*/15 5-7 * * *' # Запуск з 5 до 7 UTC кожні 15 хвилин
   workflow_dispatch:      # Можливість запуску кнопкою вручну
 
-permissions:
-  contents: write
-  actions: write
-
 jobs:
-  build:
+  check:
     runs-on: ubuntu-latest
+    outputs:
+      should_run: ${{ steps.check_status.outputs.should_run }}
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
 
       - name: Check claim status
         id: check_status
+        env:
+          LAST_CLAIM_TIMESTAMP: ${{ vars.LAST_CLAIM_TIMESTAMP }}
         run: |
           python -c '
-          import json, os, datetime
+          import os, datetime
           from datetime import timezone, timedelta
           
           def get_kyiv_offset(dt):
@@ -52,13 +52,10 @@ jobs:
                   f.write("should_run=true\n")
               exit(0)
 
-          try:
-              with open("state.json", "r") as f:
-                  state = json.load(f)
-          except Exception:
-              state = {}
-          
-          last_claim_str = state.get("last_claim_time")
+          last_claim_str = os.getenv("LAST_CLAIM_TIMESTAMP")
+          if last_claim_str and last_claim_str.lower() in ["", "none", "null"]:
+              last_claim_str = None
+
           should_run = "true"
           if last_claim_str:
               try:
@@ -76,55 +73,53 @@ jobs:
               f.write(f"should_run={should_run}\n")
           '
 
+  claim:
+    needs: check
+    if: needs.check.outputs.should_run == 'true' || github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
       - name: Set up Python
-        if: steps.check_status.outputs.should_run == 'true'
         uses: actions/setup-python@v5
         with:
           python-version: '3.11'
 
       - name: Install dependencies
-        if: steps.check_status.outputs.should_run == 'true'
         run: |
           pip install -r requirements.txt
 
-      - name: Install Chrome
-        if: steps.check_status.outputs.should_run == 'true'
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y google-chrome-stable
-
-      - name: Install Xvfb
-        if: steps.check_status.outputs.should_run == 'true'
-        run: |
-          sudo apt-get install -y xvfb
-
-      - name: Run script
-        if: steps.check_status.outputs.should_run == 'true'
+      - name: Run script with Xvfb
         id: claim_script
+        uses: GabrielBB/xvfb-action@v1
         env:
           INCRYPTED_EMAIL: ${{ secrets.INCRYPTED_EMAIL }}
           INCRYPTED_PASSWORD: ${{ secrets.INCRYPTED_PASSWORD }}
           TG_BOT_TOKEN: ${{ secrets.TG_BOT_TOKEN }}
           TG_CHAT_ID: ${{ secrets.TG_CHAT_ID }}
           RESIDENTIAL_PROXY: ${{ secrets.RESIDENTIAL_PROXY }}
-          DISPLAY: ":99"
-        run: |
-          # Start Xvfb virtual display (1920x1080, 24-bit color)
-          Xvfb :99 -screen 0 1920x1080x24 &
-          sleep 2
-          # Run script using the virtual display
-          python src/main.py
+          LAST_CLAIM_TIMESTAMP: ${{ vars.LAST_CLAIM_TIMESTAMP }}
+          STREAK_COUNT: ${{ vars.STREAK_COUNT }}
+        with:
+          run: python src/main.py
 
-      - name: Commit and push state if changed
-        if: always() && steps.check_status.outputs.should_run == 'true'
+      - name: Update GitHub Variables
+        if: success()
+        env:
+          GH_TOKEN: ${{ secrets.GH_PAT }}
         run: |
-          git config --global user.name "github-actions[bot]"
-          git config --global user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add state.json || true
-          git diff --staged --quiet state.json || (git commit -m "Update claim state [skip ci]" && git push)
+          # Use gh variable set to update repository variables.
+          # Note: GH_PAT must be a Personal Access Token with repository scope since default GITHUB_TOKEN cannot write variables.
+          if [ -n "${{ steps.claim_script.outputs.next_claim_timestamp }}" ]; then
+            gh variable set LAST_CLAIM_TIMESTAMP --body "${{ steps.claim_script.outputs.next_claim_timestamp }}"
+          fi
+          if [ -n "${{ steps.claim_script.outputs.next_streak_count }}" ]; then
+            gh variable set STREAK_COUNT --body "${{ steps.claim_script.outputs.next_streak_count }}"
+          fi
 
       - name: Upload debug artifacts
-        if: always() && steps.check_status.outputs.should_run == 'true'
+        if: always()
         uses: actions/upload-artifact@v4
         with:
           name: debug-screenshots

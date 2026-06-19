@@ -20,23 +20,20 @@ EMAIL = os.getenv("INCRYPTED_EMAIL")
 PASSWORD = os.getenv("INCRYPTED_PASSWORD")
 PROXY = os.getenv("RESIDENTIAL_PROXY")
 SILENT_ON_COOLDOWN = os.getenv("SILENT_ON_COOLDOWN", "True").lower() == "true"
-STATE_FILE = "state.json"
 
 def load_state():
-    if os.path.exists(STATE_FILE):
-        try:
-            with open(STATE_FILE, "r") as f:
-                return json.load(f)
-        except Exception as e:
-            print(f"Error loading state.json: {e}")
-    return {"last_claim_time": None, "streak_count": 0}
-
-def save_state(state):
+    last_claim_str = os.getenv("LAST_CLAIM_TIMESTAMP")
+    if last_claim_str and last_claim_str.lower() in ["", "none", "null"]:
+        last_claim_str = None
+        
+    streak_count_str = os.getenv("STREAK_COUNT")
     try:
-        with open(STATE_FILE, "w") as f:
-            json.dump(state, f, indent=2)
-    except Exception as e:
-        print(f"Error saving state.json: {e}")
+        streak_count = int(streak_count_str) if streak_count_str else 0
+    except ValueError:
+        streak_count = 0
+
+    return {"last_claim_time": last_claim_str, "streak_count": streak_count}
+
 
 def get_kyiv_offset(dt):
     if dt.tzinfo is not None:
@@ -152,7 +149,9 @@ def claim_daily_reward(max_retries=3):
 
                 state["last_claim_time"] = now.strftime("%Y-%m-%dT%H:%M:%SZ")
                 state["streak_count"] = streak_count
-                save_state(state)
+                
+                set_github_output("next_claim_timestamp", state["last_claim_time"])
+                set_github_output("next_streak_count", state["streak_count"])
 
                 send_telegram_message(
                     f"🎉 <b>Incrypted</b>\n"
@@ -168,7 +167,9 @@ def claim_daily_reward(max_retries=3):
 
                 state["last_claim_time"] = now.strftime("%Y-%m-%dT%H:%M:%SZ")
                 state["streak_count"] = streak_count
-                save_state(state)
+                
+                set_github_output("next_claim_timestamp", state["last_claim_time"])
+                set_github_output("next_streak_count", state["streak_count"])
 
                 if not SILENT_ON_COOLDOWN:
                     send_telegram_message(
@@ -198,7 +199,9 @@ def claim_daily_reward(max_retries=3):
 
                 state["last_claim_time"] = claim_time.strftime("%Y-%m-%dT%H:%M:%SZ")
                 state["streak_count"] = streak_count
-                save_state(state)
+                
+                set_github_output("next_claim_timestamp", state["last_claim_time"])
+                set_github_output("next_streak_count", state["streak_count"])
 
                 if not SILENT_ON_COOLDOWN:
                     send_telegram_message(
