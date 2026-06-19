@@ -55,7 +55,14 @@ def log_page_state(sb, label=""):
 
 def bypass_turnstile(sb):
     """Attempt to bypass Cloudflare Turnstile if present."""
-    if sb.is_element_visible('iframe[src*="turnstile"]'):
+    print("DEBUG: Checking for Turnstile iframe...")
+    try:
+        visible = sb.is_element_visible('iframe[src*="turnstile"]')
+    except Exception as e:
+        print(f"DEBUG: Error checking Turnstile visibility: {e}")
+        visible = False
+
+    if visible:
         print("DEBUG: Cloudflare Turnstile detected. Attempting to bypass...")
         try:
             sb.switch_to_frame('iframe[src*="turnstile"]')
@@ -91,6 +98,12 @@ class IncryptedBrowser:
         with SB(uc=True, headless=headless_mode, proxy=self.proxy, binary_location=binary_location) as sb:
 
             # ── Connection & Proxy Diagnosis ──────────────────────────────
+            print("DEBUG: Setting page load timeout to 30s...")
+            try:
+                sb.driver.set_page_load_timeout(30)
+            except Exception as e:
+                print(f"DEBUG: Could not set page load timeout: {e}")
+
             print("DEBUG: Testing connection and checking public IP...")
             try:
                 sb.open("https://api.ipify.org?format=json")
@@ -150,8 +163,10 @@ class IncryptedBrowser:
                 sb.sleep(10)
 
                 # Bypass Turnstile again in case it appears after login
+                print("DEBUG: Checking Turnstile after login click...")
                 bypass_turnstile(sb)
                 sb.sleep(3)
+                print("DEBUG: Logging page state after login...")
                 log_page_state(sb, "After login attempt")
 
             # ── STEP 5: Verify we successfully reached the account page ──
