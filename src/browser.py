@@ -31,6 +31,11 @@ def log_page_state(sb, label=""):
             print(f"  Body text (first 400 chars): {body[:400].strip()!r}")
         except Exception:
             pass
+        try:
+            source = sb.get_page_source()
+            print(f"  Page Source (first 1000 chars): {source[:1000].strip()!r}")
+        except Exception:
+            pass
         print('='*60 + "\n")
     except Exception as e:
         print(f"[STATE] Could not read page state: {e}")

@@ -98,7 +98,8 @@ def main():
         password = os.getenv("INCRYPTED_PASSWORD")
         proxy = os.getenv("RESIDENTIAL_PROXY")
         
-        headless = not args.debug
+        # Force GUI mode. Xvfb will hide the window in CI. Cloudflare blocks native headless Chrome.
+        headless = False
         binary_location = get_binary_path()
         sb = None
         
