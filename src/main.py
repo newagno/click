@@ -1,4 +1,5 @@
 import os
+import re
 import sys
 import argparse
 import traceback
@@ -6,15 +7,14 @@ from datetime import datetime, timezone
 
 from dotenv import load_dotenv
 
-# We will implement these modules in subsequent steps
 from scheduler import should_run_now
 from state_manager import LocalStateManager
 from validator import validate_config
 from notifier import send_telegram_message
+from browser import IncryptedBrowser, parse_proxy
 
 # pyrefly: ignore [missing-import]
 from seleniumbase import SB
-from browser import IncryptedBrowser
 
 def get_binary_path():
     if sys.platform == "win32":
@@ -84,54 +84,64 @@ def main():
             print("Skipping execution: Claim already performed in current cycle.")
             sys.exit(0)
 
-    # 4. Mode: update (Only updates state, e.g., after successful claim)
-    if args.mode == "update":
-        # In a real run, the claim logic would pass the new state via env vars or we'd just update it directly after claim
-        # Since we are unifying in main.py, we can just save it.
-        # But wait, if mode == update, where do we get the new state?
-        # A better architecture is to do everything in "claim" mode.
-        pass
-
-    # 5. Execute Claim
+    # 4. Execute Claim
     if args.mode == "claim":
         email = os.getenv("INCRYPTED_EMAIL")
         password = os.getenv("INCRYPTED_PASSWORD")
-        proxy = os.getenv("RESIDENTIAL_PROXY")
-        
-        # Force GUI mode. Xvfb will hide the window in CI. Cloudflare blocks native headless Chrome.
+        proxy_raw = os.getenv("RESIDENTIAL_PROXY", "")
+
+        # Parse proxy for authenticated connections.
+        # SeleniumBase with uc=True on Linux requires a Chrome extension for proxy auth.
+        # We build the proxy string as scheme://host:port and handle auth via extension args.
+        proxy_parts = parse_proxy(proxy_raw)
+        if proxy_parts:
+            # SB proxy kwarg accepts: scheme://user:pass@host:port
+            # With uc=True this works correctly only via the extension approach.
+            # Pass full string — SeleniumBase handles extension creation internally.
+            proxy_arg = proxy_raw
+            print(f"DEBUG: Using proxy → {proxy_parts['scheme']}://***@{proxy_parts['host']}:{proxy_parts['port']}")
+        else:
+            proxy_arg = None
+            print("DEBUG: No proxy configured — connecting directly.")
+
+        # Force GUI mode. Xvfb hides the window in CI.
+        # Cloudflare blocks native headless Chrome fingerprints.
         headless = False
         binary_location = get_binary_path()
+        sb_context = None
         sb = None
-        
+
         try:
             print("Initializing browser session...")
-            # We initialize SB here so we can catch exceptions globally and guarantee cleanup
-            # Note: We use uc=True for Undetected ChromeDriver to bypass WAF
-            sb_context = SB(uc=True, headless=headless, proxy=proxy, binary_location=binary_location)
+            sb_context = SB(
+                uc=True,
+                headless=headless,
+                proxy=proxy_arg,
+                binary_location=binary_location,
+            )
             sb = sb_context.__enter__()
-            
+
             browser = IncryptedBrowser(sb, email, password)
             result = browser.execute_claim()
-            
+
             if result == "claimed":
                 print("Claim successful!")
                 new_streak = streak_count + 1
                 new_state = {"last_claim": datetime.now(timezone.utc).isoformat(), "streak": new_streak}
                 state_manager.save(new_state)
                 send_telegram_message(f"🎉 <b>Incrypted</b>\nУспішно зібрано щоденну винагороду!\n🔥 Днів підряд: <b>{new_streak}</b>")
-            
-            elif result.startswith("cooldown"):
-                # Handle cooldown properly, maybe user claimed manually
-                print(f"Reward already claimed manually. {result}")
+
+            elif result.startswith("cooldown") or result == "already_claimed":
+                print(f"Reward already claimed. {result}")
                 new_state = {"last_claim": datetime.now(timezone.utc).isoformat(), "streak": streak_count}
                 state_manager.save(new_state)
                 send_telegram_message(f"✅ <b>Incrypted</b>\nНагороду вже забрано.\n🔥 Днів підряд: <b>{streak_count}</b>")
-                
+
             elif result.startswith("error"):
                 raise Exception(f"Browser claim failed: {result}")
             else:
                 raise Exception(f"Unknown result from browser: {result}")
-                
+
         except Exception as e:
             error_trace = traceback.format_exc()
             print(f"CRITICAL ERROR: {e}\n{error_trace}")
@@ -143,8 +153,8 @@ def main():
                 print("Closing browser session and cleaning up resources...")
                 try:
                     sb_context.__exit__(None, None, None)
-                except Exception as e:
-                    print(f"Error during browser cleanup: {e}")
+                except Exception as cleanup_err:
+                    print(f"Error during browser cleanup: {cleanup_err}")
 
 if __name__ == "__main__":
     main()
