@@ -49,12 +49,13 @@ def main():
 
     load_dotenv()
 
-    # 1. Validate environment configuration
-    try:
-        validate_config()
-    except Exception as e:
-        print(f"Configuration error: {e}")
-        sys.exit(1)
+    # 1. Validate environment configuration for execution
+    if args.mode == "claim":
+        try:
+            validate_config()
+        except Exception as e:
+            print(f"Configuration error: {e}")
+            sys.exit(1)
 
     # 2. Initialize State Manager
     state_manager = LocalStateManager()
