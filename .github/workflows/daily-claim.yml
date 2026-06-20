@@ -2,96 +2,64 @@ name: Daily Incrypted Claim
 
 on:
   schedule:
-    - cron: '*/15 5-7 * * *' # Запуск з 5 до 7 UTC кожні 15 хвилин
-  workflow_dispatch:      # Можливість запуску кнопкою вручну
+    - cron: '5 6 * * *'      # 08:05/09:05 Kyiv (depending on DST)
+    - cron: '0 12 * * *'     # Backup: 14:00/15:00 Kyiv
+  workflow_dispatch:
+  push:
+    paths:
+      - 'src/**'
+      - 'tests/**'
+      - '.github/workflows/daily-claim.yml'
+      - 'requirements.txt'
+  pull_request:
+
+concurrency:
+  group: daily-claim
+  cancel-in-progress: false
+
+permissions:
+  contents: write      # Required to commit state.json back to repo
 
 jobs:
-  check:
-    runs-on: ubuntu-latest
-    outputs:
-      should_run: ${{ steps.check_status.outputs.should_run }}
-    steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
-
-      - name: Check claim status
-        id: check_status
-        env:
-          LAST_CLAIM_TIMESTAMP: ${{ vars.LAST_CLAIM_TIMESTAMP }}
-        run: |
-          python -c '
-          import os, datetime
-          from datetime import timezone, timedelta
-          
-          def get_kyiv_offset(dt):
-              year = dt.year
-              march_last = datetime.datetime(year, 3, 31, 1, 0, tzinfo=timezone.utc)
-              march_offset = (march_last.weekday() + 1) % 7
-              dst_start = march_last - timedelta(days=march_offset)
-              oct_last = datetime.datetime(year, 10, 31, 1, 0, tzinfo=timezone.utc)
-              oct_offset = (oct_last.weekday() + 1) % 7
-              dst_end = oct_last - timedelta(days=oct_offset)
-              if dst_start <= dt < dst_end:
-                  return timezone(timedelta(hours=3))
-              return timezone(timedelta(hours=2))
-          
-          def get_kyiv_now():
-              now_utc = datetime.datetime.now(timezone.utc)
-              return now_utc.astimezone(get_kyiv_offset(now_utc))
-          
-          def get_cycle_start(dt_kyiv):
-              today_eight = dt_kyiv.replace(hour=8, minute=0, second=0, microsecond=0)
-              if dt_kyiv >= today_eight:
-                  return today_eight
-              return today_eight - timedelta(days=1)
-
-          is_manual = os.getenv("GITHUB_EVENT_NAME") == "workflow_dispatch"
-          if is_manual:
-              print("Manual run, forcing execution.")
-              with open(os.environ["GITHUB_OUTPUT"], "a") as f:
-                  f.write("should_run=true\n")
-              exit(0)
-
-          last_claim_str = os.getenv("LAST_CLAIM_TIMESTAMP")
-          if last_claim_str and last_claim_str.lower() in ["", "none", "null"]:
-              last_claim_str = None
-
-          should_run = "true"
-          if last_claim_str:
-              try:
-                  last_claim_time = datetime.datetime.fromisoformat(last_claim_str.replace("Z", "+00:00"))
-                  last_claim_kyiv = last_claim_time.astimezone(get_kyiv_offset(last_claim_time))
-                  now_kyiv = get_kyiv_now()
-                  current_cycle_start = get_cycle_start(now_kyiv)
-                  if last_claim_kyiv >= current_cycle_start:
-                      should_run = "false"
-                      print(f"Already claimed today. Last claim: {last_claim_kyiv}, current cycle started at: {current_cycle_start}")
-              except Exception as e:
-                  print(f"Error parsing last claim time: {e}")
-          
-          with open(os.environ["GITHUB_OUTPUT"], "a") as f:
-              f.write(f"should_run={should_run}\n")
-          '
-
-  claim:
-    needs: check
-    if: needs.check.outputs.should_run == 'true' || github.event_name == 'workflow_dispatch'
+  test:
+    if: github.event_name == 'push' || github.event_name == 'pull_request'
     runs-on: ubuntu-latest
     steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
-
-      - name: Set up Python
-        uses: actions/setup-python@v5
+      - uses: actions/checkout@v4
+      
+      - uses: actions/setup-python@v5
         with:
           python-version: '3.11'
+          cache: 'pip'
+      
+      - run: pip install -r requirements.txt
+      
+      - name: Run Tests
+        run: python -m pytest tests/
 
-      - name: Install dependencies
-        run: |
-          pip install -r requirements.txt
-
-      - name: Run script with Xvfb
-        id: claim_script
+  claim_flow:
+    if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          ref: main
+          fetch-depth: 0
+      
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: 'pip'
+      
+      - run: pip install -r requirements.txt
+      
+      - name: Check Status
+        id: check
+        run: python src/main.py --mode check
+      
+      - name: Execute Claim
+        if: steps.check.outputs.should_run == 'true' || github.event_name == 'workflow_dispatch'
         uses: GabrielBB/xvfb-action@v1
         env:
           INCRYPTED_EMAIL: ${{ secrets.INCRYPTED_EMAIL }}
@@ -99,31 +67,30 @@ jobs:
           TG_BOT_TOKEN: ${{ secrets.TG_BOT_TOKEN }}
           TG_CHAT_ID: ${{ secrets.TG_CHAT_ID }}
           RESIDENTIAL_PROXY: ${{ secrets.RESIDENTIAL_PROXY }}
-          LAST_CLAIM_TIMESTAMP: ${{ vars.LAST_CLAIM_TIMESTAMP }}
-          STREAK_COUNT: ${{ vars.STREAK_COUNT }}
         with:
-          run: python src/main.py
+          run: python src/main.py --mode claim
 
-      - name: Update GitHub Variables
-        if: success()
-        env:
-          GH_TOKEN: ${{ secrets.GH_PAT }}
+      - name: Commit and Push state.json
+        if: success() || always() # Best to check if file changed even if partial success
         run: |
-          # Use gh variable set to update repository variables.
-          # Note: GH_PAT must be a Personal Access Token with repository scope since default GITHUB_TOKEN cannot write variables.
-          if [ -n "${{ steps.claim_script.outputs.next_claim_timestamp }}" ]; then
-            gh variable set LAST_CLAIM_TIMESTAMP --body "${{ steps.claim_script.outputs.next_claim_timestamp }}"
-          fi
-          if [ -n "${{ steps.claim_script.outputs.next_streak_count }}" ]; then
-            gh variable set STREAK_COUNT --body "${{ steps.claim_script.outputs.next_streak_count }}"
+          if [[ -n $(git status -s state.json) ]]; then
+            git config --global user.name "github-actions[bot]"
+            git config --global user.email "github-actions[bot]@users.noreply.github.com"
+            git add state.json
+            git commit -m "Update state [skip ci]"
+            git pull --rebase origin main
+            git push origin HEAD:main
+          else
+            echo "No changes to state.json to commit."
           fi
 
       - name: Upload debug artifacts
-        if: always()
+        if: failure() || github.event_name == 'workflow_dispatch'
         uses: actions/upload-artifact@v4
         with:
-          name: debug-screenshots
+          name: debug-${{ github.run_id }}
           path: |
-            *.png
-            *.html
+            debug_*.png
+            debug_*.html
+            debug_traceback_*.txt
           retention-days: 3
