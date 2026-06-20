@@ -124,6 +124,16 @@ def claim_daily_reward(max_retries=3):
     now_kyiv = get_kyiv_now()
     current_cycle_start = get_cycle_start(now_kyiv)
 
+    was_unclaimed_in_this_cycle = True
+    if last_claim_str:
+        try:
+            _last_time = datetime.fromisoformat(last_claim_str.replace("Z", "+00:00"))
+            _last_kyiv = _last_time.astimezone(get_kyiv_offset(_last_time))
+            if _last_kyiv >= current_cycle_start:
+                was_unclaimed_in_this_cycle = False
+        except Exception:
+            pass
+
     # Smart Cooldown Skip: Check if we have already successfully claimed in the current cycle
     if last_claim_str and not is_manual:
         try:
@@ -171,10 +181,10 @@ def claim_daily_reward(max_retries=3):
                 set_github_output("next_claim_timestamp", state["last_claim_time"])
                 set_github_output("next_streak_count", state["streak_count"])
 
-                if not SILENT_ON_COOLDOWN:
+                if not SILENT_ON_COOLDOWN or was_unclaimed_in_this_cycle:
                     send_telegram_message(
                         f"✅ <b>Incrypted</b>\n"
-                        f"Вже забрано сьогодні.\n"
+                        f"Нагороду вже забрано сьогодні.\n"
                         f"🔥 Днів підряд: <b>{streak_count}</b>"
                     )
                 else:
@@ -203,10 +213,10 @@ def claim_daily_reward(max_retries=3):
                 set_github_output("next_claim_timestamp", state["last_claim_time"])
                 set_github_output("next_streak_count", state["streak_count"])
 
-                if not SILENT_ON_COOLDOWN:
+                if not SILENT_ON_COOLDOWN or was_unclaimed_in_this_cycle:
                     send_telegram_message(
                         f"⏳ <b>Incrypted</b>\n"
-                        f"Ще не час. {timer_info}\n"
+                        f"Нагорода вже забрана. {timer_info}\n"
                         f"🔥 Днів підряд: <b>{streak_count}</b>"
                     )
                 else:
