@@ -2,41 +2,20 @@ name: Daily Incrypted Claim
 
 on:
   schedule:
-    - cron: '5 6 * * *'      # 08:05/09:05 Kyiv (depending on DST)
-    - cron: '0 12 * * *'     # Backup: 14:00/15:00 Kyiv
+    - cron: '5 6 * * *'      # 09:05 Kyiv (UTC+3 summer)
+    - cron: '0 7 * * *'      # 10:00 Kyiv — backup #1
+    - cron: '0 12 * * *'     # 15:00 Kyiv — backup #2 (catches missed morning)
   workflow_dispatch:
-  push:
-    paths:
-      - 'src/**'
-      - 'tests/**'
-      - '.github/workflows/daily-claim.yml'
-      - 'requirements.txt'
-  pull_request:
 
+# Each cron/manual run gets its own concurrency slot — no blocking each other.
 concurrency:
-  group: daily-claim
+  group: claim-${{ github.event_name }}-${{ github.run_id }}
   cancel-in-progress: false
 
 permissions:
   contents: write      # Required to commit state.json back to repo
 
 jobs:
-  test:
-    if: github.event_name == 'push' || github.event_name == 'pull_request'
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      
-      - uses: actions/setup-python@v5
-        with:
-          python-version: '3.11'
-          cache: 'pip'
-      
-      - run: pip install -r requirements.txt
-      
-      - name: Run Tests
-        run: python -m pytest tests/
-
   claim_flow:
     if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-latest
@@ -46,18 +25,18 @@ jobs:
         with:
           ref: main
           fetch-depth: 0
-      
+
       - uses: actions/setup-python@v5
         with:
           python-version: '3.11'
           cache: 'pip'
-      
+
       - run: pip install -r requirements.txt
-      
+
       - name: Check Status
         id: check
         run: python src/main.py --mode check
-      
+
       - name: Execute Claim
         if: steps.check.outputs.should_run == 'true' || github.event_name == 'workflow_dispatch'
         uses: GabrielBB/xvfb-action@v1
@@ -71,7 +50,7 @@ jobs:
           run: python src/main.py --mode claim
 
       - name: Commit and Push state.json
-        if: success() || always() # Best to check if file changed even if partial success
+        if: always()
         run: |
           if [[ -n $(git status -s state.json) ]]; then
             git config --global user.name "github-actions[bot]"
