@@ -60,17 +60,19 @@ jobs:
         id: check
         run: python src/main.py --mode check
 
+      - name: Install Xvfb
+        if: steps.check.outputs.should_run == 'true' || github.event_name == 'workflow_dispatch'
+        run: sudo apt-get update && sudo apt-get install -y xvfb
+
       - name: Execute Claim
         if: steps.check.outputs.should_run == 'true' || github.event_name == 'workflow_dispatch'
-        uses: GabrielBB/xvfb-action@v1
         env:
           INCRYPTED_EMAIL: ${{ secrets.INCRYPTED_EMAIL }}
           INCRYPTED_PASSWORD: ${{ secrets.INCRYPTED_PASSWORD }}
           TG_BOT_TOKEN: ${{ secrets.TG_BOT_TOKEN }}
           TG_CHAT_ID: ${{ secrets.TG_CHAT_ID }}
           RESIDENTIAL_PROXY: ${{ secrets.RESIDENTIAL_PROXY }}
-        with:
-          run: python src/main.py --mode claim
+        run: xvfb-run --auto-servernum python src/main.py --mode claim
 
       - name: Commit and Push state.json
         if: always()
