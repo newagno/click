@@ -72,7 +72,7 @@ jobs:
           TG_BOT_TOKEN: ${{ secrets.TG_BOT_TOKEN }}
           TG_CHAT_ID: ${{ secrets.TG_CHAT_ID }}
           RESIDENTIAL_PROXY: ${{ secrets.RESIDENTIAL_PROXY }}
-        run: xvfb-run --auto-servernum python src/main.py --mode claim
+        run: xvfb-run --auto-servernum --server-args="-screen 0 1920x1080x24" python src/main.py --mode claim
 
       - name: Commit and Push state.json
         if: always()
