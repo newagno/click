@@ -6,16 +6,39 @@ on:
     - cron: '0 7 * * *'      # 10:00 Kyiv — backup #1
     - cron: '0 12 * * *'     # 15:00 Kyiv — backup #2 (catches missed morning)
   workflow_dispatch:
+  push:
+    branches:
+      - main
+    paths:
+      - 'src/**'
+      - 'tests/**'
+      - 'requirements.txt'
 
-# Each cron/manual run gets its own concurrency slot — no blocking each other.
+# Static group guarantees only one process touches state.json and the target site at a time.
 concurrency:
-  group: claim-${{ github.event_name }}-${{ github.run_id }}
+  group: daily-claim
   cancel-in-progress: false
 
 permissions:
   contents: write      # Required to commit state.json back to repo
 
 jobs:
+  test:
+    if: github.event_name == 'push'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: 'pip'
+
+      - run: pip install -r requirements.txt
+
+      - name: Run Tests
+        run: python -m pytest tests/
+
   claim_flow:
     if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-latest
