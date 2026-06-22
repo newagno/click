@@ -2,9 +2,11 @@ name: Daily Incrypted Claim
 
 on:
   schedule:
-    - cron: '5 6 * * *'      # 09:05 Kyiv (UTC+3 summer)
-    - cron: '0 7 * * *'      # 10:00 Kyiv — backup #1
-    - cron: '0 12 * * *'     # 15:00 Kyiv — backup #2 (catches missed morning)
+    - cron: '0 5 * * *'      # 08:00 Kyiv (UTC+3 summer) — Основний запуск
+    - cron: '30 5 * * *'     # 08:30 Kyiv — резерв #1
+    - cron: '0 6 * * *'      # 09:00 Kyiv — резерв #2
+    - cron: '0 7 * * *'      # 10:00 Kyiv — резерв #3
+    - cron: '0 12 * * *'     # 15:00 Kyiv — резерв #4
   workflow_dispatch:
   push:
     branches:
