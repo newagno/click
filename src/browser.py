@@ -189,7 +189,7 @@ class IncryptedBrowser:
         # ── STEP 3: Wait for either login form OR dashboard to appear ──
         print("DEBUG: Waiting for login form or dashboard elements...")
         found = False
-        for i in range(20):
+        for i in range(40):
             if self.sb.is_element_visible('iframe[src*="turnstile"]'):
                 print("DEBUG: Turnstile detected during wait, attempting bypass...")
                 bypass_turnstile(self.sb)
@@ -210,7 +210,7 @@ class IncryptedBrowser:
 
         if not found:
             log_page_state(self.sb, "TIMEOUT - neither login form nor dashboard appeared")
-            return "error|Page did not load expected content after 40s"
+            return "error|Page did not load expected content after 80s"
 
         # ── STEP 4: Log in if form is visible ─────────────────────────
         if self.sb.is_element_visible("#llms_login"):

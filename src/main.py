@@ -133,9 +133,18 @@ def main():
 
             elif result.startswith("cooldown") or result == "already_claimed":
                 print(f"Reward already claimed. {result}")
-                new_state = {"last_claim": datetime.now(timezone.utc).isoformat(), "streak": streak_count}
+                # Check if this "already_claimed" is a new claim in the current cycle (e.g. manual claim)
+                status = should_run_now(last_claim_str, is_manual=False)
+                if status["should_run"]:
+                    new_streak = streak_count + 1
+                    print(f"Detected manual claim for the current cycle. Incrementing streak to {new_streak}")
+                else:
+                    new_streak = streak_count
+                    print(f"Claim already recorded for the current cycle. Keeping streak at {new_streak}")
+                
+                new_state = {"last_claim": datetime.now(timezone.utc).isoformat(), "streak": new_streak}
                 state_manager.save(new_state)
-                send_telegram_message(f"✅ <b>Incrypted</b>\nНагороду вже забрано.\n🔥 Днів підряд: <b>{streak_count}</b>")
+                send_telegram_message(f"✅ <b>Incrypted</b>\nНагороду вже забрано.\n🔥 Днів підряд: <b>{new_streak}</b>")
 
             elif result.startswith("error"):
                 raise Exception(f"Browser claim failed: {result}")

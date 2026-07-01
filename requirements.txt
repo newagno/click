@@ -1,4 +1,4 @@
-seleniumbase>=4.27.0
+seleniumbase
 requests
 python-dotenv
 pytest
