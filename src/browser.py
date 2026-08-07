@@ -114,29 +114,14 @@ def check_proxy_connectivity(sb):
 
 
 def bypass_turnstile(sb):
-    """Attempt to bypass Cloudflare Turnstile if present."""
-    print("DEBUG: Checking for Turnstile iframe...")
+    """Attempt to bypass Cloudflare Turnstile using native SeleniumBase method."""
+    print("DEBUG: Checking for Turnstile / Cloudflare challenge...")
     try:
-        visible = sb.is_element_visible('iframe[src*="turnstile"]')
+        # ponytail: Rely on native SeleniumBase bypass instead of manual frame switching
+        sb.uc_gui_click_captcha()
+        sb.sleep(3)
     except Exception as e:
-        print(f"DEBUG: Error checking Turnstile visibility: {e}")
-        visible = False
-
-    if visible:
-        print("DEBUG: Cloudflare Turnstile detected. Attempting to bypass...")
-        try:
-            sb.switch_to_frame('iframe[src*="turnstile"]')
-            sb.click('span.mark')
-            sb.switch_to_default_content()
-            sb.sleep(5)
-            print("DEBUG: Turnstile bypass attempted successfully.")
-            return True
-        except Exception as e:
-            print(f"DEBUG: Could not click Turnstile: {e}")
-            try:
-                sb.switch_to_default_content()
-            except Exception:
-                pass
+        print(f"DEBUG: Turnstile bypass skipped/failed: {e}")
     return False
 
 
@@ -169,16 +154,10 @@ class IncryptedBrowser:
         check_proxy_connectivity(self.sb)
         print("DEBUG: Proxy check passed. Proceeding.")
 
-        # ── Page load timeout ──────────────────────────────────────────
-        print("DEBUG: Setting page load timeout to 45s...")
-        try:
-            self.sb.driver.set_page_load_timeout(45)
-        except Exception as e:
-            print(f"DEBUG: Could not set page load timeout: {e}")
-
         # ── STEP 1: Open the account page directly ─────────────────────
         print("DEBUG: Opening account page...")
-        self.sb.uc_open_with_reconnect("https://incrypted.com/ua/account/", 10)
+        # ponytail: shorter reconnect time, let uc_gui_click_captcha handle the rest
+        self.sb.uc_open_with_reconnect("https://incrypted.com/ua/account/", 5)
         self.sb.sleep(4)
         log_page_state(self.sb, "After initial page load")
 
@@ -190,10 +169,8 @@ class IncryptedBrowser:
         print("DEBUG: Waiting for login form or dashboard elements...")
         found = False
         for i in range(40):
-            if self.sb.is_element_visible('iframe[src*="turnstile"]'):
-                print("DEBUG: Turnstile detected during wait, attempting bypass...")
-                bypass_turnstile(self.sb)
-                self.sb.sleep(1)
+            # Try to bypass Turnstile during wait
+            bypass_turnstile(self.sb)
 
             if self.sb.is_element_visible("#llms_login"):
                 print(f"DEBUG: Login form appeared after {(i+1)*2}s")
