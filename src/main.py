@@ -95,16 +95,41 @@ def main():
         # We build the proxy string as scheme://host:port and handle auth via extension args.
         proxy_parts = parse_proxy(proxy_raw)
         if proxy_parts:
-            # Chromium ignores user:pass embedded in --proxy-server; auth must be
-            # passed separately so SeleniumBase injects it via its proxy-auth extension.
-            proxy_arg = f"{proxy_parts['host']}:{proxy_parts['port']}"
-            proxy_user_arg = proxy_parts["user"]
-            proxy_pass_arg = proxy_parts["password"]
+            # Chromium ignores user:pass in --proxy-server. Standard fix: a small
+            # proxy-auth extension that answers the auth challenge.
+            import zipfile, tempfile
+            host, port = proxy_parts["host"], proxy_parts["port"]
+            user, pwd = proxy_parts["user"], proxy_parts["password"]
+            ext_dir = tempfile.mkdtemp()
+            bg_js = f"""var config = {{
+                mode: "fixed_servers",
+                rules: {{ singleProxy: {{ scheme: "http", host: "{host}", port: parseInt({port}) }},
+                        bypassList: ["localhost"] }}
+            }};
+            chrome.proxy.settings.set({{ value: config, scope: "regular" }}, function(){{}});
+            chrome.webRequest.onAuthRequired.addListener(
+                function(details) {{
+                    return {{ authCredentials: {{ username: "{user}", password: "{pwd}" }} }};
+                }},
+                {{ urls: ["<all_urls>"] }},
+                ["blocking"]
+            );"""
+            manifest = json.dumps({
+                "version": "1.0.0", "manifest_version": 2, "name": "Proxy Auth",
+                "permissions": ["proxy", "tabs", "unlimitedStorage", "storage",
+                                "<all_urls>", "webRequest", "webRequestBlocking"],
+                "background": {"scripts": ["background.js"]},
+            })
+            ext_zip = os.path.join(ext_dir, "proxy_auth.zip")
+            with zipfile.ZipFile(ext_zip, "w") as z:
+                z.writestr("background.js", bg_js)
+                z.writestr("manifest.json", manifest)
+            proxy_arg = f"{host}:{port}"
+            extension_arg = ext_zip
             print(f"DEBUG: Using proxy → {proxy_arg} (auth via extension)")
         else:
             proxy_arg = None
-            proxy_user_arg = None
-            proxy_pass_arg = None
+            extension_arg = None
             print("DEBUG: No proxy configured — connecting directly.")
 
         # Force GUI mode. Xvfb hides the window in CI.
@@ -116,14 +141,15 @@ def main():
 
         try:
             print("Initializing browser session...")
-            sb_context = SB(
+            sb_kwargs = dict(
                 uc=True,
                 headless=headless,
-                proxy=proxy_arg,
-                proxy_user=proxy_user_arg,
-                proxy_pass=proxy_pass_arg,
                 binary_location=binary_location,
             )
+            if proxy_arg:
+                sb_kwargs["proxy"] = proxy_arg
+                sb_kwargs["extension_zip"] = extension_arg
+            sb_context = SB(**sb_kwargs)
             sb = sb_context.__enter__()
 
             browser = IncryptedBrowser(sb, email, password)
