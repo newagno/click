@@ -114,34 +114,39 @@ def check_proxy_connectivity(sb):
     )
 
 
-def wait_for_bypass(sb, timeout=45):
-    """Aggressive bypass retry until Cloudflare page clears or timeout."""
-    print("DEBUG: Aggressive Cloudflare bypass started...")
+def wait_for_bypass(sb, timeout=60):
+    """Aggressive bypass retry until Cloudflare page clears with increased timeout."""
+    print("DEBUG: Aggressive Cloudflare bypass started (60s)...")
     deadline = timeout
-    step = 4
+    step = 5
     waited = 0
-    while waited < timeout:
+    while waited < deadline:
         try:
             sb.uc_gui_click_captcha()
         except Exception as e:
             print(f"DEBUG: uc_gui_click_captcha attempt failed: {e}")
+        
         try:
             title = sb.get_title().lower()
-            body = (sb.get_text("body") or "").lower()
+            body = sb.get_text("body").lower()
             if (
-                "just a moment" not in title
-                and "cloudflare" not in title
-                and "_cf_chl_opt" not in body
+                "just a moment" not in title 
+                and "cloudflare" not in title 
                 and "performing security verification" not in body
+                and "_cf_chl_opt" not in body
             ):
-                print("DEBUG: Cloudflare challenge cleared.")
+                print(f"DEBUG: Cloudflare challenge cleared after {waited}s.")
                 return True
         except Exception:
             pass
+            
+        print(f"DEBUG: Still blocked by Cloudflare... ({waited}s / {deadline}s)")
         sb.sleep(step)
         waited += step
+    
     print("DEBUG: Cloudflare bypass timeout.")
     return False
+
 
 
 def bypass_turnstile(sb):
