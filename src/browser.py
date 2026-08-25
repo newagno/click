@@ -6,7 +6,7 @@ from drag_engine import DragEngine
 
 def parse_proxy(proxy_str: str) -> dict | None:
     """
-    Parses proxy string into components.
+    Parses proxy string into components using rpartition to safely handle '@' in passwords.
     Accepts formats:
       http://user:pass@host:port
       user:pass@host:port
@@ -14,23 +14,31 @@ def parse_proxy(proxy_str: str) -> dict | None:
     """
     if not proxy_str:
         return None
-    # Strip scheme if present
+        
     scheme = "http"
     s = proxy_str
-    m = re.match(r'^(https?)://', s)
-    if m:
-        scheme = m.group(1)
-        s = s[len(m.group(0)):]
-    # Parse user:pass@host:port
-    m = re.match(r'^([^:]+):([^@]+)@([^:]+):(\d+)$', s)
-    if not m:
+    
+    if s.startswith("http://"):
+        scheme, s = "http", s[7:]
+    elif s.startswith("https://"):
+        scheme, s = "https", s[8:]
+        
+    credentials, _, host_port = s.rpartition('@')
+    if not credentials or not host_port:
         return None
+        
+    user, _, password = credentials.partition(':')
+    host, _, port = host_port.partition(':')
+    
+    if not user or not password or not host or not port:
+        return None
+        
     return {
         "scheme": scheme,
-        "user": m.group(1),
-        "password": m.group(2),
-        "host": m.group(3),
-        "port": int(m.group(4)),
+        "user": user,
+        "password": password,
+        "host": host,
+        "port": int(port),
     }
 
 
@@ -97,7 +105,6 @@ def check_proxy_connectivity(sb):
             body_lower = body.lower()
             print(f"DEBUG: Probe body: {body[:300]!r}")
 
-            # Detect Chrome network-error pages — these are NOT a working proxy
             if any(m in body_lower for m in CHROME_ERR_MARKERS):
                 print(f"DEBUG: Chrome network error detected via {url}. Proxy transport broken.")
                 continue
@@ -112,7 +119,7 @@ def check_proxy_connectivity(sb):
                 continue
             if body:
                 print(f"DEBUG: Proxy connectivity OK. Visible IP/trace: {body[:200]}")
-                return  # success
+                return  
         except RuntimeError:
             raise
         except Exception as e:
@@ -126,12 +133,17 @@ def check_proxy_connectivity(sb):
 
 def wait_for_bypass(sb, timeout=60):
     """Aggressive bypass retry until Cloudflare page clears with increased timeout."""
-    print("DEBUG: Aggressive Cloudflare bypass started (60s)...")
+    print(f"DEBUG: Aggressive Cloudflare bypass started ({timeout}s)...")
     deadline = timeout
     step = 5
     waited = 0
     while waited < deadline:
         try:
+            current_url = sb.get_current_url()
+            if current_url.startswith("chrome-error://"):
+                print(f"DEBUG: Network error detected ({current_url}). Bypass aborted.")
+                return False
+
             sb.uc_gui_click_captcha()
         except Exception as e:
             print(f"DEBUG: uc_gui_click_captcha attempt failed: {e}")
@@ -155,12 +167,6 @@ def wait_for_bypass(sb, timeout=60):
         waited += step
     
     print("DEBUG: Cloudflare bypass timeout.")
-    return False
-
-
-
-def bypass_turnstile(sb):
-    """Compatibility wrapper; use wait_for_bypass() for waits."""
     return False
 
 
@@ -197,6 +203,8 @@ def load_cookies(sb, url: str, path: str | None = None) -> bool:
                 sb.driver.add_cookie(c)
             except Exception:
                 pass
+        # Reload to apply cookies effectively
+        sb.open(url)
         print(f"DEBUG: Loaded {len(cookies)} cookies from {path}")
         return True
     except Exception as e:
@@ -243,10 +251,12 @@ class IncryptedBrowser:
         print("DEBUG: Proxy check passed. Proceeding.")
 
         # ── STEP 1: Try cookie-based bypass first ──────────────────────
-        print("DEBUG: Trying cookie-based session bypass...")
-        cookie_loaded = load_cookies(self.sb, "https://incrypted.com/ua/account/")
+        print("DEBUG: Loading page via UC mode...")
         self.sb.uc_open_with_reconnect("https://incrypted.com/ua/account/", 5)
         self.sb.sleep(3)
+
+        print("DEBUG: Trying cookie-based session bypass...")
+        cookie_loaded = load_cookies(self.sb, "https://incrypted.com/ua/account/")
         log_page_state(self.sb, "After initial page load" + (" with cookies" if cookie_loaded else ""))
 
         dashboard_ready = bool(find_checkin_element(self.sb) or self.sb.is_element_visible(".drag-daily-check .inc-btn-checkin-disabled"))
@@ -262,7 +272,7 @@ class IncryptedBrowser:
         print("DEBUG: Waiting for login form or dashboard elements...")
         found = False
         for i in range(40):
-            bypass_turnstile(self.sb)
+            wait_for_bypass(self.sb, timeout=2)
 
             if self.sb.is_element_visible("#llms_login"):
                 print(f"DEBUG: Login form appeared after {(i+1)*2}s")
@@ -278,7 +288,6 @@ class IncryptedBrowser:
             self.sb.sleep(2)
 
         if not found:
-            # DEBUG: Dump source on timeout
             try:
                 print("DEBUG: TIMEOUT SOURCE DUMP START")
                 print(self.sb.get_page_source()[:5000])
@@ -306,7 +315,7 @@ class IncryptedBrowser:
             self.sb.sleep(10)
 
             print("DEBUG: Checking Turnstile after login click...")
-            bypass_turnstile(self.sb)
+            wait_for_bypass(self.sb, timeout=5)
             self.sb.sleep(3)
             log_page_state(self.sb, "After login attempt")
 
@@ -365,7 +374,7 @@ class IncryptedBrowser:
             engine.perform_drag(slider_selector, drag_distance)
 
             print("DEBUG: Checking for Turnstile post-drag...")
-            bypass_turnstile(self.sb)
+            wait_for_bypass(self.sb, timeout=5)
             self.sb.sleep(3)
 
             print("DEBUG: Drag completed. Waiting dynamically for claim to register...")
