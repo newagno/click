@@ -85,6 +85,8 @@ def check_proxy_connectivity(sb):
         "https://cloudflare.com/cdn-cgi/trace",
         "https://api.ipify.org?format=text",
     ]
+    CHROME_ERR_MARKERS = ["this site can’t be reached", "err_too_many_retries",
+                          "err_connection", "err_timed_out", "err_proxy", "dns_probe"]
     for url in PROBE_URLS:
         print(f"DEBUG: Proxy probe → {url}")
         try:
@@ -92,14 +94,15 @@ def check_proxy_connectivity(sb):
             sb.sleep(3)
             body = sb.get_text("body").strip()
             source = sb.get_page_source().strip()
+            body_lower = body.lower()
             print(f"DEBUG: Probe body: {body[:300]!r}")
 
-            # Detect empty DOM: Cloudflare returns rich HTML, ipify returns just an IP.
+            # Detect Chrome network-error pages — these are NOT a working proxy
+            if any(m in body_lower for m in CHROME_ERR_MARKERS):
+                print(f"DEBUG: Chrome network error detected via {url}. Proxy transport broken.")
+                continue
             if source in ("", "<html><head></head><body></body></html>"):
-                raise RuntimeError(
-                    f"Proxy connection failed: empty DOM received from {url}. "
-                    "Check RESIDENTIAL_PROXY secret — proxy may be offline, misconfigured, or auth is failing."
-                )
+                continue
             if body:
                 print(f"DEBUG: Proxy connectivity OK. Visible IP/trace: {body[:200]}")
                 return  # success
