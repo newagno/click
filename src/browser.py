@@ -102,6 +102,13 @@ def check_proxy_connectivity(sb):
                 print(f"DEBUG: Chrome network error detected via {url}. Proxy transport broken.")
                 continue
             if source in ("", "<html><head></head><body></body></html>"):
+                try:
+                    print(f"DEBUG: Proxy empty DOM from {url}")
+                    print("DEBUG: FAILED_PROBE_SOURCE_START")
+                    print(sb.get_page_source()[:1000])
+                    print("DEBUG: FAILED_PROBE_SOURCE_END")
+                except Exception:
+                    pass
                 continue
             if body:
                 print(f"DEBUG: Proxy connectivity OK. Visible IP/trace: {body[:200]}")
