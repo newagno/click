@@ -103,6 +103,7 @@ def main():
             import zipfile, tempfile
             host, port = proxy_parts["host"], proxy_parts["port"]
             user, pwd = proxy_parts["user"], proxy_parts["password"]
+            user_js, pwd_js = json.dumps(user), json.dumps(pwd)
             ext_dir = tempfile.mkdtemp()
             bg_js = f"""var config = {{
                 mode: "fixed_servers",
@@ -112,7 +113,7 @@ def main():
             chrome.proxy.settings.set({{ value: config, scope: "regular" }}, function(){{}});
             chrome.webRequest.onAuthRequired.addListener(
                 function(details) {{
-                    return {{ authCredentials: {{ username: "{user}", password: "{pwd}" }} }};
+                    return {{ authCredentials: {{ username: {user_js}, password: {pwd_js} }} }};
                 }},
                 {{ urls: ["<all_urls>"] }},
                 ["blocking"]
@@ -151,15 +152,10 @@ def main():
             )
             if proxy_arg:
                 sb_kwargs["proxy"] = proxy_arg
+                sb_kwargs["extension_zip"] = extension_arg
+                print("DEBUG: Proxy-auth extension zip passed to SB")
             sb_context = SB(**sb_kwargs)
             sb = sb_context.__enter__()
-            # Load proxy-auth extension after UC has created the browser
-            if proxy_arg:
-                try:
-                    sb.driver.add_extension(extension_arg)
-                    print("DEBUG: Proxy-auth extension added")
-                except Exception as e:
-                    print(f"DEBUG: Extension install failed: {e}")
 
             browser = IncryptedBrowser(sb, email, password)
             result = browser.execute_claim()
