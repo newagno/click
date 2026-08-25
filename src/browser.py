@@ -1,5 +1,6 @@
 import os
 import re
+import json
 from drag_engine import DragEngine
 
 
@@ -21,7 +22,7 @@ def parse_proxy(proxy_str: str) -> dict | None:
         scheme = m.group(1)
         s = s[len(m.group(0)):]
     # Parse user:pass@host:port
-    m = re.match(r'^([^:]+):([^@]+)@([^:]+):(\d+)$', s)
+    m = re.match(r'^(<sup>[\[:\]](#fn-:)</sup>+):(<sup>[\[@\]](#fn-@)</sup>+)@(<sup>[\[:\]](#fn-:)</sup>+):(\d+)$', s)
     if not m:
         return None
     return {
@@ -148,6 +149,55 @@ def bypass_turnstile(sb):
     return False
 
 
+COOKIE_FILE = "incrypted_cookies.json"
+
+
+def _cookie_path() -> str:
+    return COOKIE_FILE
+
+
+def save_cookies(sb, path: str | None = None) -> None:
+    """Persist current browser cookies to disk."""
+    path = path or _cookie_path()
+    try:
+        cookies = sb.driver.get_cookies()
+        with open(path, "w", encoding="utf-8") as f:
+            json.dump(cookies, f)
+        print(f"DEBUG: Saved {len(cookies)} cookies to {path}")
+    except Exception as e:
+        print(f"DEBUG: Failed to save cookies: {e}")
+
+
+def load_cookies(sb, url: str, path: str | None = None) -> bool:
+    """Load cookies for the given origin. Returns True if cookies were loaded."""
+    path = path or _cookie_path()
+    if not os.path.exists(path):
+        return False
+    try:
+        with open(path, "r", encoding="utf-8") as f:
+            cookies = json.load(f)
+        sb.open(url)
+        for c in cookies:
+            try:
+                sb.driver.add_cookie(c)
+            except Exception:
+                pass
+        print(f"DEBUG: Loaded {len(cookies)} cookies from {path}")
+        return True
+    except Exception as e:
+        print(f"DEBUG: Failed to load cookies: {e}")
+        return False
+
+
+def clear_cookies(path: str | None = None) -> None:
+    path = path or _cookie_path()
+    try:
+        if os.path.exists(path):
+            os.remove(path)
+    except Exception:
+        pass
+
+
 def find_checkin_element(sb):
     """Resilient selector for the claim section."""
     selectors = [
@@ -177,130 +227,21 @@ class IncryptedBrowser:
         check_proxy_connectivity(self.sb)
         print("DEBUG: Proxy check passed. Proceeding.")
 
-        # ── STEP 1: Open the account page directly ─────────────────────
-        print("DEBUG: Opening account page...")
-        # ponytail: shorter reconnect time, let uc_gui_click_captcha handle the rest
+        # ── STEP 1: Try cookie-based bypass first ──────────────────────
+        print("DEBUG: Trying cookie-based session bypass...")
+        cookie_loaded = load_cookies(self.sb, "https://incrypted.com/ua/account/")
         self.sb.uc_open_with_reconnect("https://incrypted.com/ua/account/", 5)
-        self.sb.sleep(4)
-        log_page_state(self.sb, "After initial page load")
+        self.sb.sleep(3)
+        log_page_state(self.sb, "After initial page load" + (" with cookies" if cookie_loaded else ""))
+
+        dashboard_ready = bool(find_checkin_element(self.sb) or self.sb.is_element_visible(".drag-daily-check .inc-btn-checkin-disabled"))
+        if cookie_loaded and dashboard_ready:
+            print("DEBUG: Cookie bypass worked, dashboard visible.")
+            return self._finish_claim()
 
         # ── STEP 2: Handle initial Cloudflare Turnstile ────────────────
         wait_for_bypass(self.sb, timeout=45)
         self.sb.sleep(2)
 
         # ── STEP 3: Wait for either login form OR dashboard to appear ──
-        print("DEBUG: Waiting for login form or dashboard elements...")
-        found = False
-        for i in range(40):
-            # Try to bypass Turnstile during wait
-            bypass_turnstile(self.sb)
-
-            if self.sb.is_element_visible("#llms_login"):
-                print(f"DEBUG: Login form appeared after {(i+1)*2}s")
-                found = True
-                break
-
-            if find_checkin_element(self.sb) or self.sb.is_element_visible(".drag-daily-check .inc-btn-checkin-disabled"):
-                print(f"DEBUG: Dashboard (claim section) appeared after {(i+1)*2}s - already logged in!")
-                found = True
-                break
-
-            print(f"DEBUG: Waiting... ({(i+1)*2}s elapsed)")
-            self.sb.sleep(2)
-
-        if not found:
-            body_lower = ""
-            try:
-                body_lower = (self.sb.get_text("body") or "").lower()
-            except Exception:
-                pass
-            if "cloudflare" in self.sb.get_title().lower() or "just a moment" in self.sb.get_title().lower() or "_cf_chl_opt" in body_lower or "performing security verification" in body_lower:
-                return "error|Cloudflare challenge not solved after initial load; uc_gui_click_captcha ineffective or blocked"
-            log_page_state(self.sb, "TIMEOUT - neither login form nor dashboard appeared")
-            return "error|Page did not load expected content after 80s"
-
-        # ── STEP 4: Log in if form is visible ─────────────────────────
-        if self.sb.is_element_visible("#llms_login"):
-            print("DEBUG: Filling login credentials...")
-            self.sb.type("#llms_login", self.email)
-            self.sb.type("#llms_password", self.password)
-            self.sb.sleep(1)
-            self.sb.click("#llms_login_button")
-            print("DEBUG: Login button clicked. Waiting 10s...")
-            self.sb.sleep(10)
-
-            print("DEBUG: Checking Turnstile after login click...")
-            bypass_turnstile(self.sb)
-            self.sb.sleep(3)
-            log_page_state(self.sb, "After login attempt")
-
-        # ── STEP 5: Verify we successfully reached the account page ──
-        current_url = self.sb.get_current_url()
-        if "account" not in current_url:
-            log_page_state(self.sb, "ERROR - not on account page")
-            return "error|Failed to reach account page, stuck at login or Cloudflare?"
-
-        # ── STEP 6: Check if the daily claim section is present ────────
-        checkin_selector = find_checkin_element(self.sb)
-        disabled_visible = self.sb.is_element_visible(".drag-daily-check .inc-btn-checkin-disabled")
-        print(f"DEBUG: Daily claim section visible: {bool(checkin_selector) or disabled_visible}")
-
-        if not (checkin_selector or disabled_visible):
-            log_page_state(self.sb, "ERROR - daily claim section not found")
-            body_text = self.sb.get_text("body")
-            if any(kw in body_text for kw in ["Неправильний пароль", "Невірний", "Incorrect password"]):
-                return "error|Incorrect credentials"
-            return "error|Daily claim section not found on the account dashboard"
-
-        # ── STEP 7: Check cooldown / already claimed ───────────────────
-        if disabled_visible:
-            print("DEBUG: Daily reward already claimed. Parsing cooldown timer...")
-            try:
-                timer_text = self.sb.get_text(".drag-daily-check .inc-btn-checkin-disabled").strip()
-                print(f"DEBUG: Cooldown timer text: {timer_text}")
-                return f"cooldown|{timer_text}"
-            except Exception as e:
-                print(f"DEBUG: Could not parse timer: {e}")
-                return "already_claimed"
-
-        # ── STEP 8: Perform the drag-and-drop swipe to claim ──────────
-        print("DEBUG: Daily reward unclaimed. Starting slider drag...")
-        slider_selector = "#locker"
-        print(f"DEBUG: Using slider selector: {slider_selector}")
-
-        try:
-            self.sb.wait_for_element(slider_selector, timeout=10)
-
-            try:
-                width = self.sb.execute_script(
-                    "return document.querySelector('.inc-swipe-btn') ? document.querySelector('.inc-swipe-btn').offsetWidth : 350;"
-                )
-                drag_distance = width - 20
-            except Exception:
-                drag_distance = 350
-
-            engine = DragEngine(self.sb)
-            engine.perform_drag(slider_selector, drag_distance)
-
-            print("DEBUG: Checking for Turnstile post-drag...")
-            bypass_turnstile(self.sb)
-            self.sb.sleep(3)
-
-            print("DEBUG: Drag completed. Waiting dynamically for claim to register...")
-            try:
-                self.sb.wait_for_element(".drag-daily-check .inc-btn-checkin-disabled", timeout=15)
-                print("DEBUG: Claim successfully confirmed dynamically!")
-                return "claimed"
-            except Exception:
-                print("DEBUG: Cooldown timer not found dynamically. Refreshing page to verify server state...")
-                self.sb.refresh()
-                self.sb.sleep(5)
-
-                if self.sb.is_element_visible(".drag-daily-check .inc-btn-checkin-disabled"):
-                    print("DEBUG: Claim successfully confirmed after refresh!")
-                    return "claimed"
-                else:
-                    print("DEBUG: Cooldown timer not found after refresh.")
-                    return "error|Slider was dragged, but claim state did not persist on the server"
-        except Exception as e:
-            return f"error|Failed to drag slider: {str(e)}"
+        print("DEBUG: Waiting for l
