@@ -156,8 +156,8 @@ def main():
             # Load proxy-auth extension after UC has created the browser
             if proxy_arg:
                 try:
-                    sb.driver.install_addon(extension_arg, temporary=True)
-                    print("DEBUG: Proxy-auth extension installed")
+                    sb.driver.add_extension(extension_arg)
+                    print("DEBUG: Proxy-auth extension added")
                 except Exception as e:
                     print(f"DEBUG: Extension install failed: {e}")
 
