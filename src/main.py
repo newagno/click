@@ -94,24 +94,16 @@ def main():
         proxy_raw = os.getenv("RESIDENTIAL_PROXY", "")
 
         # Parse proxy for authenticated connections.
-        # SeleniumBase with uc=True on Linux requires a Chrome extension for proxy auth.
-        # We build the proxy string as scheme://host:port and handle auth via extension args.
-        # Parse proxy manually (rpartition on last '@' so user/pass may contain '@').
-        s = proxy_raw.strip()
-        m_scheme = re.match(r'^(https?)://', s)
-        if m_scheme:
-            s = s[len(m_scheme.group(0)):]
-        creds_part, at, hostport = s.rpartition("@")
-        if at and ":" in creds_part and ":" in hostport:
-            user, _, pwd = creds_part.partition(":")
-            host, _, port_str = hostport.rpartition(":")
-            port = int(port_str)
-            user_js, pwd_js = json.dumps(user), json.dumps(pwd)
+        proxy_parts = parse_proxy(proxy_raw)
+        if proxy_parts:
             import zipfile, tempfile
+            host, port = proxy_parts["host"], proxy_parts["port"]
+            user, pwd = proxy_parts["user"], proxy_parts["password"]
+            user_js, pwd_js = json.dumps(user), json.dumps(pwd)
             ext_dir = tempfile.mkdtemp()
             bg_js = f"""var config = {{
                 mode: "fixed_servers",
-                rules: {{ singleProxy: {{ scheme: "http", host: {json.dumps(host)}, port: parseInt({port}) }},
+                rules: {{ singleProxy: {{ scheme: "http", host: "{host}", port: parseInt({port}) }},
                         bypassList: ["localhost"] }}
             }};
             chrome.proxy.settings.set({{ value: config, scope: "regular" }}, function(){{}});
@@ -132,23 +124,14 @@ def main():
             with zipfile.ZipFile(ext_zip, "w") as z:
                 z.writestr("background.js", bg_js)
                 z.writestr("manifest.json", manifest)
-            # Only the extension sets the proxy; passing proxy= too conflicts with it.
-            proxy_arg = None
+            proxy_arg = f"{host}:{port}"
             extension_arg = ext_zip
-            print(f"DEBUG: Using proxy → {host}:{port} via extension only")
-            # Save extension for debug artifacts on failure
-            try:
-                import shutil as _shutil
-                _shutil.copy(ext_zip, "debug_proxy_extension.zip")
-            except Exception:
-                pass
+            print(f"DEBUG: Using proxy → {proxy_arg} (auth via extension)")
         else:
             proxy_arg = None
             extension_arg = None
-            print("DEBUG: No valid proxy configured — connecting directly.")
+            print("DEBUG: No proxy configured — connecting directly.")
 
-        # Force GUI mode. Xvfb hides the window in CI.
-        # Cloudflare blocks native headless Chrome fingerprints.
         headless = False
         binary_location = get_binary_path()
         sb_context = None
@@ -161,18 +144,13 @@ def main():
                 headless=headless,
                 binary_location=binary_location,
             )
-            if extension_arg:
+            if proxy_arg:
+                # Do NOT pass "proxy" here to avoid conflict with extension routing
                 sb_kwargs["extension_zip"] = extension_arg
                 print("DEBUG: Proxy-auth extension zip passed to SB")
+                
             sb_context = SB(**sb_kwargs)
             sb = sb_context.__enter__()
-            # Load proxy-auth extension after UC has created the browser
-            if proxy_arg:
-                try:
-                    sb.driver.add_extension(extension_arg)
-                    print("DEBUG: Proxy-auth extension added")
-                except Exception as e:
-                    print(f"DEBUG: Extension install failed: {e}")
 
             browser = IncryptedBrowser(sb, email, password)
             result = browser.execute_claim()
@@ -186,7 +164,6 @@ def main():
 
             elif result.startswith("cooldown") or result == "already_claimed":
                 print(f"Reward already claimed. {result}")
-                # Check if this "already_claimed" is a new claim in the current cycle (e.g. manual claim)
                 status = should_run_now(last_claim_str, is_manual=False)
                 if status["should_run"]:
                     new_streak = streak_count + 1
