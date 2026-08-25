@@ -151,8 +151,14 @@ def main():
             )
             if proxy_arg:
                 sb_kwargs["proxy"] = proxy_arg
-                sb_kwargs["extension_zip"] = extension_arg
             sb_context = SB(**sb_kwargs)
+            # Load proxy-auth extension after UC has created the browser
+            if proxy_arg:
+                try:
+                    sb.driver.install_addon(extension_arg, temporary=True)
+                    print("DEBUG: Proxy-auth extension installed")
+                except Exception as e:
+                    print(f"DEBUG: Extension install failed: {e}")
             sb = sb_context.__enter__()
 
             browser = IncryptedBrowser(sb, email, password)
