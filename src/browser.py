@@ -132,67 +132,45 @@ def check_proxy_connectivity(sb):
 
 
 def wait_for_bypass(sb, timeout=60):
-    """Aggressive bypass retry until Cloudflare page clears with increased timeout."""
-    print(f"DEBUG: Aggressive Cloudflare bypass started ({timeout}s)...")
+    """Click the Turnstile checkbox until it clears.
+
+    IMPORTANT: in UC mode any CDP call (get_page_source, get_text, execute_script...)
+    before/during the challenge can burn it. So: click first, check title only after.
+    """
+    print(f"DEBUG: Cloudflare bypass started ({timeout}s)...")
     deadline = timeout
     step = 5
     waited = 0
     reconnects = 0
     while waited < deadline:
-        try:
-            current_url = sb.get_current_url()
-            if current_url.startswith("chrome-error://"):
-                print(f"DEBUG: Network error detected ({current_url}). Bypass aborted.")
-                return False
-        except Exception:
-            pass
-
-        # Attempt 1: native UC GUI click (handles the "verify you are human" checkbox)
+        # Click the "verify you are human" checkbox. No CDP calls before this!
         try:
             sb.uc_gui_click_captcha()
         except Exception as e:
-            print(f"DEBUG: uc_gui_click_captcha attempt failed: {e}")
+            print(f"DEBUG: click attempt failed: {e}")
 
-        # Attempt 2: explicit Turnstile iframe checkbox click via JS fallback
-        try:
-            clicked = sb.execute_script("""
-                const f = document.querySelector('iframe[src*="challenges.cloudflare.com"], iframe[title*="Widget"]');
-                if (f) { f.scrollIntoView({block:'center'}); return true; }
-                return false;
-            """)
-            if clicked:
-                print("DEBUG: Turnstile iframe found on page.")
-        except Exception:
-            pass
-
-        # Every 3rd cycle: UC reconnect reload — fresh challenge instance
-        if waited > 0 and waited % 15 == 0 and reconnects < 4:
-            reconnects += 1
-            print(f"DEBUG: Reconnect #{reconnects} to get a fresh challenge...")
-            try:
-                sb.uc_open_with_reconnect("https://incrypted.com/ua/account/", 4)
-                sb.sleep(3)
-            except Exception as e:
-                print(f"DEBUG: reconnect failed: {e}")
-        
+        # Only now one cheap check: did the title clear?
         try:
             title = sb.get_title().lower()
-            body = sb.get_text("body").lower()
-            if (
-                "just a moment" not in title 
-                and "cloudflare" not in title 
-                and "performing security verification" not in body
-                and "_cf_chl_opt" not in body
-            ):
-                print(f"DEBUG: Cloudflare challenge cleared after {waited}s.")
+            if "just a moment" not in title and "cloudflare" not in title:
+                print(f"DEBUG: Challenge cleared after ~{waited + step}s.")
                 return True
         except Exception:
-            pass
-            
-        print(f"DEBUG: Still blocked by Cloudflare... ({waited}s / {deadline}s)")
-        sb.sleep(step)
+            pass  # page may be mid-reload; keep clicking
+
         waited += step
-    
+        if waited >= deadline:
+            break
+        # Every 3rd cycle get a fresh challenge via UC reconnect (also CDP-safe)
+        if waited % 15 == 0 and reconnects < 4:
+            reconnects += 1
+            print(f"DEBUG: Reconnect #{reconnects} for a fresh challenge...")
+            try:
+                sb.uc_open_with_reconnect("https://incrypted.com/ua/account/", 4)
+            except Exception as e:
+                print(f"DEBUG: reconnect failed: {e}")
+        sb.sleep(step)
+
     print("DEBUG: Cloudflare bypass timeout.")
     return False
 
@@ -282,18 +260,18 @@ class IncryptedBrowser:
         self.sb.uc_open_with_reconnect("https://incrypted.com/ua/account/", 5)
         self.sb.sleep(3)
 
-        print("DEBUG: Trying cookie-based session bypass...")
-        cookie_loaded = load_cookies(self.sb, "https://incrypted.com/ua/account/")
-        log_page_state(self.sb, "After initial page load" + (" with cookies" if cookie_loaded else ""))
-
-        dashboard_ready = bool(find_checkin_element(self.sb) or self.sb.is_element_visible(".drag-daily-check .inc-btn-checkin-disabled"))
-        if cookie_loaded and dashboard_ready:
-            print("DEBUG: Cookie bypass worked, dashboard visible.")
-            return self._finish_claim()
-
-        # ── STEP 2: Handle initial Cloudflare Turnstile ────────────────
-        wait_for_bypass(self.sb, timeout=45)
+        # ── STEP 2: Handle initial Cloudflare Turnstile FIRST — zero CDP before this! ──
+        bypassed = wait_for_bypass(self.sb, timeout=60)
         self.sb.sleep(2)
+
+        # Cookie/dashboard checks only AFTER challenge cleared (CDP is safe now)
+        if bypassed:
+            cookie_loaded = load_cookies(self.sb, "https://incrypted.com/ua/account/")
+            log_page_state(self.sb, "After bypass" + (" with cookies" if cookie_loaded else ""))
+            dashboard_ready = bool(find_checkin_element(self.sb) or self.sb.is_element_visible(".drag-daily-check .inc-btn-checkin-disabled"))
+            if dashboard_ready:
+                print("DEBUG: Dashboard visible after bypass.")
+                return self._finish_claim()
 
         # ── STEP 3: Wait for either login form OR dashboard to appear ──
         print("DEBUG: Waiting for login form or dashboard elements...")
