@@ -96,18 +96,22 @@ def main():
         # Parse proxy for authenticated connections.
         # SeleniumBase with uc=True on Linux requires a Chrome extension for proxy auth.
         # We build the proxy string as scheme://host:port and handle auth via extension args.
-        proxy_parts = parse_proxy(proxy_raw)
-        if proxy_parts:
-            # Chromium ignores user:pass in --proxy-server. Standard fix: a small
-            # proxy-auth extension that answers the auth challenge.
-            import zipfile, tempfile
-            host, port = proxy_parts["host"], proxy_parts["port"]
-            user, pwd = proxy_parts["user"], proxy_parts["password"]
+        # Parse proxy manually (rpartition on last '@' so user/pass may contain '@').
+        s = proxy_raw.strip()
+        m_scheme = re.match(r'^(https?)://', s)
+        if m_scheme:
+            s = s[len(m_scheme.group(0)):]
+        creds_part, at, hostport = s.rpartition("@")
+        if at and ":" in creds_part and ":" in hostport:
+            user, _, pwd = creds_part.partition(":")
+            host, _, port_str = hostport.rpartition(":")
+            port = int(port_str)
             user_js, pwd_js = json.dumps(user), json.dumps(pwd)
+            import zipfile, tempfile
             ext_dir = tempfile.mkdtemp()
             bg_js = f"""var config = {{
                 mode: "fixed_servers",
-                rules: {{ singleProxy: {{ scheme: "http", host: "{host}", port: parseInt({port}) }},
+                rules: {{ singleProxy: {{ scheme: "http", host: {json.dumps(host)}, port: parseInt({port}) }},
                         bypassList: ["localhost"] }}
             }};
             chrome.proxy.settings.set({{ value: config, scope: "regular" }}, function(){{}});
@@ -128,13 +132,20 @@ def main():
             with zipfile.ZipFile(ext_zip, "w") as z:
                 z.writestr("background.js", bg_js)
                 z.writestr("manifest.json", manifest)
-            proxy_arg = f"{host}:{port}"
+            # Only the extension sets the proxy; passing proxy= too conflicts with it.
+            proxy_arg = None
             extension_arg = ext_zip
-            print(f"DEBUG: Using proxy → {proxy_arg} (auth via extension)")
+            print(f"DEBUG: Using proxy → {host}:{port} via extension only")
+            # Save extension for debug artifacts on failure
+            try:
+                import shutil as _shutil
+                _shutil.copy(ext_zip, "debug_proxy_extension.zip")
+            except Exception:
+                pass
         else:
             proxy_arg = None
             extension_arg = None
-            print("DEBUG: No proxy configured — connecting directly.")
+            print("DEBUG: No valid proxy configured — connecting directly.")
 
         # Force GUI mode. Xvfb hides the window in CI.
         # Cloudflare blocks native headless Chrome fingerprints.
@@ -150,12 +161,18 @@ def main():
                 headless=headless,
                 binary_location=binary_location,
             )
-            if proxy_arg:
-                sb_kwargs["proxy"] = proxy_arg
+            if extension_arg:
                 sb_kwargs["extension_zip"] = extension_arg
                 print("DEBUG: Proxy-auth extension zip passed to SB")
             sb_context = SB(**sb_kwargs)
             sb = sb_context.__enter__()
+            # Load proxy-auth extension after UC has created the browser
+            if proxy_arg:
+                try:
+                    sb.driver.add_extension(extension_arg)
+                    print("DEBUG: Proxy-auth extension added")
+                except Exception as e:
+                    print(f"DEBUG: Extension install failed: {e}")
 
             browser = IncryptedBrowser(sb, email, password)
             result = browser.execute_claim()

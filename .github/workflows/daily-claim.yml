@@ -66,6 +66,17 @@ jobs:
         if: steps.check.outputs.should_run == 'true' || github.event_name == 'workflow_dispatch'
         run: sudo apt-get update && sudo apt-get install -y xvfb
 
+      - name: Proxy curl sanity check
+        if: steps.check.outputs.should_run == 'true' || github.event_name == 'workflow_dispatch'
+        env:
+          RESIDENTIAL_PROXY: ${{ secrets.RESIDENTIAL_PROXY }}
+        run: |
+          if [ -n "$RESIDENTIAL_PROXY" ]; then
+            code=$(curl -x "$RESIDENTIAL_PROXY" -s -o /dev/null -w "%{http_code}" https://1.1.1.1 --max-time 15 || echo FAIL)
+            echo "curl via proxy → $code"
+            if [ "$code" = "FAIL" ]; then echo "::warning::Proxy unreachable from runner — provider/format issue"; fi
+          fi
+
       - name: Execute Claim
         if: steps.check.outputs.should_run == 'true' || github.event_name == 'workflow_dispatch'
         env:
@@ -99,4 +110,5 @@ jobs:
             debug_*.png
             debug_*.html
             debug_traceback_*.txt
+            debug_proxy_extension.zip
           retention-days: 3
