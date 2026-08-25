@@ -137,16 +137,43 @@ def wait_for_bypass(sb, timeout=60):
     deadline = timeout
     step = 5
     waited = 0
+    reconnects = 0
     while waited < deadline:
         try:
             current_url = sb.get_current_url()
             if current_url.startswith("chrome-error://"):
                 print(f"DEBUG: Network error detected ({current_url}). Bypass aborted.")
                 return False
+        except Exception:
+            pass
 
+        # Attempt 1: native UC GUI click (handles the "verify you are human" checkbox)
+        try:
             sb.uc_gui_click_captcha()
         except Exception as e:
             print(f"DEBUG: uc_gui_click_captcha attempt failed: {e}")
+
+        # Attempt 2: explicit Turnstile iframe checkbox click via JS fallback
+        try:
+            clicked = sb.execute_script("""
+                const f = document.querySelector('iframe[src*="challenges.cloudflare.com"], iframe[title*="Widget"]');
+                if (f) { f.scrollIntoView({block:'center'}); return true; }
+                return false;
+            """)
+            if clicked:
+                print("DEBUG: Turnstile iframe found on page.")
+        except Exception:
+            pass
+
+        # Every 3rd cycle: UC reconnect reload — fresh challenge instance
+        if waited > 0 and waited % 15 == 0 and reconnects < 4:
+            reconnects += 1
+            print(f"DEBUG: Reconnect #{reconnects} to get a fresh challenge...")
+            try:
+                sb.uc_open_with_reconnect("https://incrypted.com/ua/account/", 4)
+                sb.sleep(3)
+            except Exception as e:
+                print(f"DEBUG: reconnect failed: {e}")
         
         try:
             title = sb.get_title().lower()
