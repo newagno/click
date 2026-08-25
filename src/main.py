@@ -152,6 +152,7 @@ def main():
             if proxy_arg:
                 sb_kwargs["proxy"] = proxy_arg
             sb_context = SB(**sb_kwargs)
+            sb = sb_context.__enter__()
             # Load proxy-auth extension after UC has created the browser
             if proxy_arg:
                 try:
@@ -159,7 +160,6 @@ def main():
                     print("DEBUG: Proxy-auth extension installed")
                 except Exception as e:
                     print(f"DEBUG: Extension install failed: {e}")
-            sb = sb_context.__enter__()
 
             browser = IncryptedBrowser(sb, email, password)
             result = browser.execute_claim()
