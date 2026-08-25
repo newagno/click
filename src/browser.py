@@ -263,6 +263,13 @@ class IncryptedBrowser:
             self.sb.sleep(2)
 
         if not found:
+            # DEBUG: Dump source on timeout
+            try:
+                print("DEBUG: TIMEOUT SOURCE DUMP START")
+                print(self.sb.get_page_source()[:5000])
+                print("DEBUG: TIMEOUT SOURCE DUMP END")
+            except Exception:
+                pass
             body_lower = ""
             try:
                 body_lower = (self.sb.get_text("body") or "").lower()
