@@ -95,13 +95,16 @@ def main():
         # We build the proxy string as scheme://host:port and handle auth via extension args.
         proxy_parts = parse_proxy(proxy_raw)
         if proxy_parts:
-            # SB proxy kwarg accepts: scheme://user:pass@host:port
-            # With uc=True this works correctly only via the extension approach.
-            # Pass full string — SeleniumBase handles extension creation internally.
-            proxy_arg = proxy_raw
-            print(f"DEBUG: Using proxy → {proxy_parts['scheme']}://***@{proxy_parts['host']}:{proxy_parts['port']}")
+            # Chromium ignores user:pass embedded in --proxy-server; auth must be
+            # passed separately so SeleniumBase injects it via its proxy-auth extension.
+            proxy_arg = f"{proxy_parts['host']}:{proxy_parts['port']}"
+            proxy_user_arg = proxy_parts["user"]
+            proxy_pass_arg = proxy_parts["password"]
+            print(f"DEBUG: Using proxy → {proxy_arg} (auth via extension)")
         else:
             proxy_arg = None
+            proxy_user_arg = None
+            proxy_pass_arg = None
             print("DEBUG: No proxy configured — connecting directly.")
 
         # Force GUI mode. Xvfb hides the window in CI.
@@ -117,6 +120,8 @@ def main():
                 uc=True,
                 headless=headless,
                 proxy=proxy_arg,
+                proxy_user=proxy_user_arg,
+                proxy_pass=proxy_pass_arg,
                 binary_location=binary_location,
             )
             sb = sb_context.__enter__()
