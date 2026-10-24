@@ -43,21 +43,24 @@ def format_proxy(proxy_str: str) -> str | None:
     return s if s else None
 
 
-def is_proxy_working(proxy_raw: str, timeout: int = 6) -> bool:
+def is_proxy_working(proxy_raw: str, timeout: int = 7) -> bool:
     """Check if the proxy is alive and can connect to the internet."""
     if not proxy_raw:
         return False
-    import urllib.request
+    import requests
     try:
         p = proxy_raw.strip()
         proxy_url = p if "://" in p else f"http://{p}"
-        handler = urllib.request.ProxyHandler({"http": proxy_url, "https": proxy_url})
-        opener = urllib.request.build_opener(handler)
-        req = urllib.request.Request("https://1.1.1.1", headers={"User-Agent": "Mozilla/5.0"})
-        with opener.open(req, timeout=timeout) as resp:
-            return resp.status in (200, 301, 302)
+        proxies = {"http": proxy_url, "https": proxy_url}
+        resp = requests.get(
+            "https://1.1.1.1",
+            proxies=proxies,
+            timeout=timeout,
+            headers={"User-Agent": "Mozilla/5.0"}
+        )
+        return resp.status_code in (200, 301, 302, 403)
     except Exception as e:
-        print(f"[PROXY] Проксі не пройшов перевірку зв'язку: {e}")
+        print(f"[PROXY] Проксі не пройшов перевірку через requests: {e}")
         return False
 
 
@@ -152,6 +155,18 @@ def ensure_authenticated(sb):
     print("[AUTH] Ініціалізація браузера на домені...")
     sb.uc_open_with_reconnect(BASE_URL, reconnect_time=4)
     sb.sleep(3)
+
+    # Якщо заголовок "Just a moment...", очікуємо і клікаємо Turnstile
+    for attempt in range(8):
+        cur_title = sb.get_title()
+        if "Just a moment" not in cur_title and "Cloudflare" not in cur_title:
+            break
+        print(f"[AUTH] Виявлено Cloudflare Turnstile ('{cur_title}'). Очікуємо проходження ({attempt + 1}/8)...")
+        try:
+            sb.uc_gui_click_captcha()
+        except Exception as e_cf:
+            print(f"[AUTH] uc_gui_click_captcha: {e_cf}")
+        sb.sleep(3)
 
     cur_url = sb.get_current_url()
     cur_title = sb.get_title()
@@ -254,14 +269,17 @@ def run_snake_bot(max_runs=3, headless=False):
         sb.sleep(4)
 
         # Перевірка наявності canvas гри та вирішення Cloudflare за потреби
-        for _ in range(8):
+        for attempt in range(10):
             has_canvas = sb.execute_script("return !!document.querySelector('#cs-canvas');")
             if has_canvas:
                 break
-            try:
-                sb.uc_gui_click_captcha()
-            except Exception:
-                pass
+            page_title = sb.get_title()
+            print(f"[BOT] Очікуємо завантаження арени (Title: '{page_title}', спроба {attempt + 1}/10)...")
+            if "Just a moment" in page_title or "Cloudflare" in page_title:
+                try:
+                    sb.uc_gui_click_captcha()
+                except Exception as e_cf:
+                    print(f"[BOT] uc_gui_click_captcha: {e_cf}")
             sb.sleep(2)
 
         # Перевірка стану акаунта в грі

@@ -40,12 +40,12 @@ jobs:
       - name: Install dependencies
         run: |
           pip install -r requirements.txt
-          pip install requests python-dotenv
+          pip install requests python-dotenv pyautogui Pillow
 
-      - name: Install Xvfb and Chrome
+      - name: Install Xvfb and GUI tools
         run: |
           sudo apt-get update
-          sudo apt-get install -y xvfb
+          sudo apt-get install -y xvfb scrot xdotool python3-tk
 
       - name: Proxy Sanity Check
         env:
