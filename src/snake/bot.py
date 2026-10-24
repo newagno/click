@@ -101,10 +101,28 @@ def ensure_authenticated(sb):
     email = os.getenv("INCRYPTED_EMAIL")
     password = os.getenv("INCRYPTED_PASSWORD")
 
-    # 1. Try loading cookies first
+    # 1. Спробувати завантажити куки з env (INCRYPTED_COOKIES)
+    cookies_raw = os.getenv("INCRYPTED_COOKIES")
+    if cookies_raw:
+        try:
+            print("[AUTH] Підвантажуємо куки з секрету INCRYPTED_COOKIES...")
+            sb.open(BASE_URL)
+            sb.sleep(2)
+            cookies = json.loads(cookies_raw)
+            for c in cookies:
+                try:
+                    sb.driver.add_cookie(c)
+                except Exception:
+                    pass
+            print(f"[AUTH] Успішно інжектовано {len(cookies)} куків із секрету.")
+            return True
+        except Exception as e:
+            print(f"[AUTH] Помилка завантаження куків з env: {e}")
+
+    # 2. Спробувати завантажити куки з локального файлу incrypted_cookies.json
     if COOKIE_FILE.exists():
         try:
-            print(f"[AUTH] Завантажуємо куки з {COOKIE_FILE.name}...")
+            print(f"[AUTH] Завантажуємо куки з файлу {COOKIE_FILE.name}...")
             sb.open(BASE_URL)
             sb.sleep(2)
             with open(COOKIE_FILE, "r", encoding="utf-8") as f:
@@ -117,27 +135,34 @@ def ensure_authenticated(sb):
             print(f"[AUTH] Успішно підвантажено {len(cookies)} куків.")
             return True
         except Exception as e:
-            print(f"[AUTH] Помилка завантаження куків: {e}")
+            print(f"[AUTH] Помилка завантаження куків з файлу: {e}")
 
-    # 2. If no cookies or need fresh login, use .env credentials
+    # 3. Якщо куків немає, виконуємо вхід за email + password
     if email and password:
-        print("[AUTH] Виконуємо вхід за даними з .env...")
+        print("[AUTH] Виконуємо вхід за логіном/паролем...")
         try:
             sb.uc_open_with_reconnect("https://incrypted.com/ua/account/", reconnect_time=4)
             sb.sleep(4)
-            if sb.is_element_visible("#llms_login"):
+            try:
+                sb.wait_for_element_visible("#llms_login", timeout=12)
                 sb.type("#llms_login", email)
                 sb.type("#llms_password", password)
                 sb.sleep(1)
                 sb.click("#llms_login_button")
-                sb.sleep(8)
+                sb.sleep(6)
+            except Exception as ex_form:
+                print(f"[AUTH] Форма на /ua/account/ недоступна: {ex_form}")
+
             cookies = sb.driver.get_cookies()
-            with open(COOKIE_FILE, "w", encoding="utf-8") as f:
-                json.dump(cookies, f, indent=2)
-            print(f"[AUTH] Вхід успішний, збережено {len(cookies)} куків у {COOKIE_FILE.name}")
+            try:
+                with open(COOKIE_FILE, "w", encoding="utf-8") as f:
+                    json.dump(cookies, f, indent=2)
+                print(f"[AUTH] Збережено {len(cookies)} куків.")
+            except Exception:
+                pass
             return True
         except Exception as e:
-            print(f"[AUTH] Помилка входу: {e}")
+            print(f"[AUTH] Помилка авторизації: {e}")
             return False
 
     return False
@@ -175,6 +200,17 @@ def run_snake_bot(max_runs=3, headless=False):
         sb.uc_open_with_reconnect(GAME_URL, reconnect_time=4)
         sb.sleep(4)
 
+        # Перевірка наявності canvas гри
+        for _ in range(10):
+            has_canvas = sb.execute_script("return !!document.querySelector('#cs-canvas');")
+            if has_canvas:
+                break
+            try:
+                sb.uc_gui_click_captcha()
+            except Exception:
+                pass
+            sb.sleep(2)
+
         # ── Впроваджуємо радарний перехоплювач світу ─────────────────
         inj_res = sb.execute_script("""
             return (() => {
@@ -183,6 +219,14 @@ def run_snake_bot(max_runs=3, headless=False):
                 window.CryptoSnakeCore.World.prototype.step = function(...args) {
                     window.__activeWorld = this;
                     return origStep.apply(this, args);
+                };
+                const origAddSnake = window.CryptoSnakeCore.World.prototype.addSnake;
+                window.CryptoSnakeCore.World.prototype.addSnake = function(opts) {
+                    const s = origAddSnake.apply(this, arguments);
+                    if (opts && !opts.bot) {
+                        window.__mySnakeId = s.id;
+                    }
+                    return s;
                 };
                 return 'OK';
             })()
@@ -193,7 +237,7 @@ def run_snake_bot(max_runs=3, headless=False):
         for run_idx in range(1, max_runs + 1):
             print(f"\n{'='*25} РАУНД #{run_idx} із {max_runs} {'='*25}")
 
-            # 1. Обираємо команду NEAR (.cs-char.cs-hero-near), якщо активна
+            # 1. Обираємо команду NEAR (.cs-char.cs-hero-near), якщо доступна
             try:
                 if sb.is_element_visible(".cs-char.cs-hero-near"):
                     sb.click(".cs-char.cs-hero-near")
@@ -202,7 +246,7 @@ def run_snake_bot(max_runs=3, headless=False):
             except Exception:
                 pass
 
-            # 2. Якщо раунд > 1 і видно кнопку «Грати ще», тиснемо її, інакше #cs-start
+            # 2. Якщо раунд > 1 і видно кнопку «Грати ще», тиснемо її
             if run_idx > 1 and sb.is_element_visible("#cs-again"):
                 try:
                     print("[BOT] Натискаємо кнопку 'Грати ще' (#cs-again)...")
@@ -211,17 +255,60 @@ def run_snake_bot(max_runs=3, headless=False):
                 except Exception as e:
                     print(f"[BOT] Помилка кнопки #cs-again: {e}")
 
-            if not sb.is_element_visible("#cs-hud") or sb.execute_script("return document.querySelector('#cs-hud')?.hidden;"):
+            # 3. Тиснемо кнопку старту, якщо HUD ще не відкритий
+            hud_is_open = sb.execute_script("return document.querySelector('#cs-hud') && !document.querySelector('#cs-hud').hidden;")
+            if not hud_is_open:
                 try:
-                    sb.wait_for_element_visible("#cs-start", timeout=8)
-                    btn_text = sb.get_text("#cs-start")
-                    print(f"[BOT] Натискаємо кнопку старту: '{btn_text}'...")
-                    sb.click("#cs-start")
-                    sb.sleep(3)
+                    if sb.is_element_visible("#cs-start"):
+                        btn_text = sb.get_text("#cs-start")
+                        print(f"[BOT] Натискаємо кнопку старту: '{btn_text}'...")
+                        sb.click("#cs-start")
+                        sb.sleep(3)
                 except Exception as e:
                     print(f"[BOT] Помилка старту: {e}")
 
-            # 3. Отримуємо розміри Canvas
+            # 4. Перевіряємо, чи не вискочив попап авторизації (.incr-popup-login)
+            email = os.getenv("INCRYPTED_EMAIL")
+            password = os.getenv("INCRYPTED_PASSWORD")
+            if sb.is_element_visible(".incr-popup-login") and email and password:
+                print("[BOT] З'явилося вікно входу на полі гри. Авторизуємося...")
+                try:
+                    sb.type(".incr-popup-login input[type=email], #llms_login", email)
+                    sb.type(".incr-popup-login input[type=password], #llms_password", password)
+                    sb.sleep(1)
+                    sb.click(".incr-popup-login #llms_login_button, #llms_login_button")
+                    sb.sleep(5)
+                    # Після входу тиснемо NEAR і Start
+                    if sb.is_element_visible(".cs-char.cs-hero-near"):
+                        sb.click(".cs-char.cs-hero-near")
+                        sb.sleep(1)
+                    if sb.is_element_visible("#cs-start"):
+                        sb.click("#cs-start")
+                        sb.sleep(3)
+                except Exception as e_pop:
+                    print(f"[BOT] Помилка входу через попап: {e_pop}")
+
+            # 5. Очікуємо, поки гра ДІЙСНО перейде в стан бою (HUD активний)
+            print("[BOT] Очікуємо активацію арени (поява HUD)...")
+            game_active = False
+            for _ in range(12):
+                hud_active = sb.execute_script("""
+                    return document.querySelector('#cs-hud') && !document.querySelector('#cs-hud').hidden;
+                """)
+                if hud_active:
+                    game_active = True
+                    break
+                sb.sleep(1)
+
+            if not game_active:
+                print("[BOT] ПОМИЛКА: Гра не перейшла в режим бою (HUD приховано). Перевірте авторизацію.")
+                try:
+                    sb.save_screenshot(f"game_not_started_round_{run_idx}.png")
+                except Exception:
+                    pass
+                continue
+
+            # 6. Отримуємо розміри Canvas
             canvas_rect = sb.execute_script("""
                 return (() => {
                     var c = document.querySelector('#cs-canvas');
@@ -245,6 +332,9 @@ def run_snake_bot(max_runs=3, headless=False):
                 try:
                     decision = sb.execute_script("""
                         return (() => {
+                            var canvas = document.querySelector('#cs-canvas');
+                            if (!canvas) return { is_dead: true };
+
                             var deadEl = document.querySelector('#cs-dead');
                             var hudEl  = document.querySelector('#cs-hud');
                             var isDead = (deadEl && !deadEl.hidden) || (hudEl && hudEl.hidden);
@@ -262,12 +352,18 @@ def run_snake_bot(max_runs=3, headless=False):
                                 return { is_dead: isDead, coins: currentCoins, len: currentLen, kills: currentKills, angle: null };
                             }
 
-                            // Знаходимо змійку гравця: bot === false
+                            // Знаходимо саме змійку гравця
                             var me = null;
-                            for (var s of w.snakes.values()) {
-                                if (!s.bot) {
-                                    me = s;
-                                    break;
+                            if (window.__mySnakeId !== undefined && w.snakes.has(window.__mySnakeId)) {
+                                me = w.snakes.get(window.__mySnakeId);
+                            }
+                            if (!me) {
+                                for (var s of w.snakes.values()) {
+                                    if (!s.bot) {
+                                        me = s;
+                                        window.__mySnakeId = s.id;
+                                        break;
+                                    }
                                 }
                             }
 
@@ -386,11 +482,11 @@ def run_snake_bot(max_runs=3, headless=False):
             print(f"[BOT] Забіг #{run_idx} тривав {duration_sec} сек.")
             print(f"      Очки: +{score_earned} | З'їдено змій: {kills_earned}")
 
-            # 4. Пауза 6 секунд, щоб екран смерті #cs-dead та сервер повністю синхронізувалися
+            # 7. Пауза 6 секунд, щоб екран смерті #cs-dead та сервер повністю синхронізувалися
             print("[BOT] Очікуємо синхронізацію результату із сервером (6 сек)...")
             sb.sleep(6)
 
-            # 5. Зчитуємо реальні дані з екрана смерті, localStorage та рейтингу
+            # 8. Зчитуємо реальні дані з екрана смерті, localStorage та рейтингу
             stats = sb.execute_script("""
                 return (() => {
                     var deadCoins = document.querySelector('#cs-d-coins')?.innerText;
@@ -478,7 +574,7 @@ def run_snake_bot(max_runs=3, headless=False):
 
             place_medal = "🥇" if guild_place == 1 else ("🥈" if guild_place == 2 else "🥉")
 
-            # 6. Формуємо детальний та 100% чесний звіт у Telegram
+            # 9. Формуємо детальний звіт у Telegram
             tg_message = (
                 f"🐍 <b>CryptoSnake — Забіг завершено! (#{run_idx} із {max_runs})</b>\n\n"
                 f"🎯 <b>Результат цієї гри:</b>\n"
@@ -499,7 +595,7 @@ def run_snake_bot(max_runs=3, headless=False):
             print("[BOT] Надсилаємо оновлений звіт у Telegram...")
             send_telegram_message(tg_message)
 
-            # 7. Пауза між раундами
+            # 10. Пауза між раундами
             if run_idx < max_runs:
                 print("[BOT] Пауза 5 секунд перед наступним забігом...")
                 sb.sleep(5)

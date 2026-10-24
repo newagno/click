@@ -61,6 +61,7 @@ jobs:
         env:
           INCRYPTED_EMAIL: ${{ secrets.INCRYPTED_EMAIL }}
           INCRYPTED_PASSWORD: ${{ secrets.INCRYPTED_PASSWORD }}
+          INCRYPTED_COOKIES: ${{ secrets.INCRYPTED_COOKIES }}
           TG_BOT_TOKEN: ${{ secrets.TG_BOT_TOKEN }}
           TG_CHAT_ID: ${{ secrets.TG_CHAT_ID }}
           RESIDENTIAL_PROXY: ${{ secrets.RESIDENTIAL_PROXY }}
