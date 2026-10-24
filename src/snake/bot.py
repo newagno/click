@@ -31,60 +31,34 @@ except ImportError:
     from notifier import send_telegram_message
 
 
-def parse_proxy(proxy_str: str) -> dict | None:
+def format_proxy(proxy_str: str) -> str | None:
+    """Format proxy string for SeleniumBase (username:password@host:port or host:port)."""
     if not proxy_str:
         return None
-    scheme = "http"
-    s = proxy_str
+    s = proxy_str.strip()
     if s.startswith("http://"):
-        scheme, s = "http", s[7:]
+        s = s[7:]
     elif s.startswith("https://"):
-        scheme, s = "https", s[8:]
-    credentials, _, host_port = s.rpartition('@')
-    if not credentials or not host_port:
-        return None
-    user, _, password = credentials.partition(':')
-    host, _, port = host_port.partition(':')
-    if not user or not password or not host or not port:
-        return None
-    return {
-        "scheme": scheme,
-        "user": user,
-        "password": password,
-        "host": host,
-        "port": int(port),
-    }
+        s = s[8:]
+    return s if s else None
 
 
-def create_proxy_extension(proxy_parts: dict) -> tuple[str, str]:
-    host, port = proxy_parts["host"], proxy_parts["port"]
-    user, pwd = proxy_parts["user"], proxy_parts["password"]
-    user_js, pwd_js = json.dumps(user), json.dumps(pwd)
-    ext_dir = tempfile.mkdtemp()
-    bg_js = f"""var config = {{
-        mode: "fixed_servers",
-        rules: {{ singleProxy: {{ scheme: "http", host: "{host}", port: parseInt({port}) }},
-                bypassList: ["localhost"] }}
-    }};
-    chrome.proxy.settings.set({{ value: config, scope: "regular" }}, function(){{}});
-    chrome.webRequest.onAuthRequired.addListener(
-        function(details) {{
-            return {{ authCredentials: {{ username: {user_js}, password: {pwd_js} }} }};
-        }},
-        {{ urls: ["<all_urls>"] }},
-        ["blocking"]
-    );"""
-    manifest = json.dumps({
-        "version": "1.0.0", "manifest_version": 2, "name": "Proxy Auth",
-        "permissions": ["proxy", "tabs", "unlimitedStorage", "storage",
-                        "<all_urls>", "webRequest", "webRequestBlocking"],
-        "background": {"scripts": ["background.js"]},
-    })
-    ext_zip = os.path.join(ext_dir, "proxy_auth.zip")
-    with zipfile.ZipFile(ext_zip, "w") as z:
-        z.writestr("background.js", bg_js)
-        z.writestr("manifest.json", manifest)
-    return f"{host}:{port}", ext_zip
+def is_proxy_working(proxy_raw: str, timeout: int = 6) -> bool:
+    """Check if the proxy is alive and can connect to the internet."""
+    if not proxy_raw:
+        return False
+    import urllib.request
+    try:
+        p = proxy_raw.strip()
+        proxy_url = p if "://" in p else f"http://{p}"
+        handler = urllib.request.ProxyHandler({"http": proxy_url, "https": proxy_url})
+        opener = urllib.request.build_opener(handler)
+        req = urllib.request.Request("https://1.1.1.1", headers={"User-Agent": "Mozilla/5.0"})
+        with opener.open(req, timeout=timeout) as resp:
+            return resp.status in (200, 301, 302)
+    except Exception as e:
+        print(f"[PROXY] Проксі не пройшов перевірку зв'язку: {e}")
+        return False
 
 
 def get_binary_path():
@@ -162,7 +136,10 @@ def inject_cookie_safely(driver, c: dict) -> bool:
         clean_no_domain = {k: v for k, v in clean.items() if k != "domain"}
         driver.add_cookie(clean_no_domain)
         return True
-    except Exception:
+    except Exception as e_add:
+        if not getattr(inject_cookie_safely, "_logged", False):
+            print(f"[AUTH DEBUG] Не вдалося додати {name}: {e_add} (Поточний URL: {driver.current_url})")
+            inject_cookie_safely._logged = True
         return False
 
 
@@ -175,6 +152,18 @@ def ensure_authenticated(sb):
     print("[AUTH] Ініціалізація браузера на домені...")
     sb.uc_open_with_reconnect(BASE_URL, reconnect_time=4)
     sb.sleep(3)
+
+    cur_url = sb.get_current_url()
+    cur_title = sb.get_title()
+    print(f"[AUTH] Поточний URL: {cur_url} | Заголовок: '{cur_title}'")
+    if not cur_url or "incrypted.com" not in cur_url:
+        print("[AUTH] Повторна спроба відкрити BASE_URL...")
+        try:
+            sb.open(BASE_URL)
+            sb.sleep(3)
+            print(f"[AUTH] URL після відкриття: {sb.get_current_url()}")
+        except Exception as e_open:
+            print(f"[AUTH] Помилка відкриття BASE_URL: {e_open}")
 
     # 1. Спробувати завантажити куки з env (INCRYPTED_COOKIES)
     cookies = parse_cookies_from_env(cookies_raw)
@@ -232,7 +221,7 @@ def ensure_authenticated(sb):
 def run_snake_bot(max_runs=3, headless=False):
     binary = get_binary_path()
     proxy_raw = os.getenv("RESIDENTIAL_PROXY", "")
-    proxy_parts = parse_proxy(proxy_raw)
+    proxy_clean = format_proxy(proxy_raw)
 
     sb_kwargs = dict(
         uc=True,
@@ -240,11 +229,14 @@ def run_snake_bot(max_runs=3, headless=False):
         binary_location=binary
     )
 
-    if proxy_parts:
-        proxy_arg, ext_zip = create_proxy_extension(proxy_parts)
-        sb_kwargs["proxy"] = proxy_arg
-        sb_kwargs["extension_dir"] = ext_zip
-        print(f"[BOT] Проксі активовано: {proxy_parts['host']}")
+    if proxy_clean:
+        print("[BOT] Перевірка доступності проксі-сервера...")
+        if is_proxy_working(proxy_raw, timeout=7):
+            sb_kwargs["proxy"] = proxy_clean
+            host_display = proxy_clean.split("@")[-1]
+            print(f"[BOT] Проксі перевірено та активовано: {host_display}")
+        else:
+            print("[BOT] ⚠️ Проксі не відповідає або облікові дані недійсні! Працюємо напряму без проксі.")
 
     print("=" * 60)
     print(f"[BOT] Запуск інтелектуального бота CryptoSnake")
