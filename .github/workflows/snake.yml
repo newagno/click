@@ -1,0 +1,81 @@
+name: CryptoSnake Auto-Play (3 Sessions/Day)
+
+on:
+  schedule:
+    - cron: '0 6 * * *'      # 09:00 Kyiv (Ранок)
+    - cron: '0 11 * * *'     # 14:00 Kyiv (День)
+    - cron: '0 17 * * *'     # 20:00 Kyiv (Вечір)
+  workflow_dispatch:
+    inputs:
+      runs:
+        description: 'Кількість забігів у цій сесії'
+        required: true
+        default: '3'
+        type: string
+
+# Ensure only one snake session runs at a time
+concurrency:
+  group: cryptosnake-session
+  cancel-in-progress: false
+
+permissions:
+  contents: write
+
+jobs:
+  play_session:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          ref: main
+          fetch-depth: 0
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: 'pip'
+
+      - name: Install dependencies
+        run: |
+          pip install -r requirements.txt
+          pip install requests python-dotenv
+
+      - name: Install Xvfb and Chrome
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y xvfb
+
+      - name: Proxy Sanity Check
+        env:
+          RESIDENTIAL_PROXY: ${{ secrets.RESIDENTIAL_PROXY }}
+        run: |
+          if [ -n "$RESIDENTIAL_PROXY" ]; then
+            code=$(curl -x "$RESIDENTIAL_PROXY" -s -o /dev/null -w "%{http_code}" https://1.1.1.1 --max-time 15 || echo FAIL)
+            echo "curl via proxy → $code"
+            if [ "$code" = "FAIL" ]; then echo "::warning::Proxy unreachable from runner"; fi
+          fi
+
+      - name: Run CryptoSnake Bot
+        env:
+          INCRYPTED_EMAIL: ${{ secrets.INCRYPTED_EMAIL }}
+          INCRYPTED_PASSWORD: ${{ secrets.INCRYPTED_PASSWORD }}
+          TG_BOT_TOKEN: ${{ secrets.TG_BOT_TOKEN }}
+          TG_CHAT_ID: ${{ secrets.TG_CHAT_ID }}
+          RESIDENTIAL_PROXY: ${{ secrets.RESIDENTIAL_PROXY }}
+        run: |
+          RUNS_COUNT="${{ github.event.inputs.runs || '3' }}"
+          echo "[*] Launching CryptoSnake bot with $RUNS_COUNT runs..."
+          xvfb-run --auto-servernum --server-args="-screen 0 1920x1080x24" python src/snake/run.py "$RUNS_COUNT"
+
+      - name: Upload artifacts on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: snake-debug-${{ github.run_id }}
+          path: |
+            *.png
+            *.json
+            src/snake/*.log
+          retention-days: 3
