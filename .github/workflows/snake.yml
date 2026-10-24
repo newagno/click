@@ -70,8 +70,8 @@ jobs:
           echo "[*] Launching CryptoSnake bot with $RUNS_COUNT runs..."
           xvfb-run --auto-servernum --server-args="-screen 0 1920x1080x24" python src/snake/run.py "$RUNS_COUNT"
 
-      - name: Upload artifacts on failure
-        if: failure()
+      - name: Upload debug artifacts
+        if: always()
         uses: actions/upload-artifact@v4
         with:
           name: snake-debug-${{ github.run_id }}
