@@ -100,7 +100,7 @@ def ensure_authenticated(sb):
     """Loads existing cookies or logs in automatically via .env credentials."""
     email = os.getenv("INCRYPTED_EMAIL")
     password = os.getenv("INCRYPTED_PASSWORD")
-    
+
     # 1. Try loading cookies first
     if COOKIE_FILE.exists():
         try:
@@ -147,7 +147,7 @@ def run_snake_bot(max_runs=3, headless=False):
     binary = get_binary_path()
     proxy_raw = os.getenv("RESIDENTIAL_PROXY", "")
     proxy_parts = parse_proxy(proxy_raw)
-    
+
     sb_kwargs = dict(
         uc=True,
         headless=headless,
@@ -163,7 +163,7 @@ def run_snake_bot(max_runs=3, headless=False):
     print("=" * 60)
     print(f"[BOT] Запуск інтелектуального бота CryptoSnake")
     print(f"      Цільова команда : NEAR (бонус ×2)")
-    print(f"      Режим зору      : Активний векторний радар (монети NEAR + ухилення)")
+    print(f"      Режим зору      : Векторний радар рушія + нативне CDP-керування")
     print(f"      Кількість ігор  : {max_runs}")
     print(f"      Браузер         : {binary or 'Системний'}")
     print("=" * 60)
@@ -176,22 +176,24 @@ def run_snake_bot(max_runs=3, headless=False):
         sb.sleep(4)
 
         # ── Впроваджуємо радарний перехоплювач світу ─────────────────
-        sb.execute_script("""
-            (() => {
-                if (!window.CryptoSnakeCore || !window.CryptoSnakeCore.World) return;
+        inj_res = sb.execute_script("""
+            return (() => {
+                if (!window.CryptoSnakeCore || !window.CryptoSnakeCore.World) return 'NO_CORE';
                 const origStep = window.CryptoSnakeCore.World.prototype.step;
                 window.CryptoSnakeCore.World.prototype.step = function(...args) {
                     window.__activeWorld = this;
                     return origStep.apply(this, args);
                 };
+                return 'OK';
             })()
         """)
+        print(f"[BOT] Ін'єкція радарного перехоплювача: {inj_res}")
         sb.sleep(1)
 
         for run_idx in range(1, max_runs + 1):
             print(f"\n{'='*25} РАУНД #{run_idx} із {max_runs} {'='*25}")
 
-            # 1. Завжди обираємо команду NEAR (.cs-char.cs-hero-near)
+            # 1. Обираємо команду NEAR (.cs-char.cs-hero-near), якщо активна
             try:
                 if sb.is_element_visible(".cs-char.cs-hero-near"):
                     sb.click(".cs-char.cs-hero-near")
@@ -200,26 +202,28 @@ def run_snake_bot(max_runs=3, headless=False):
             except Exception:
                 pass
 
-            # 2. Натискаємо кнопку «Грати» (#cs-start)
-            try:
-                sb.wait_for_element_visible("#cs-start", timeout=8)
-                sb.sleep(1)
-                btn_text = sb.get_text("#cs-start")
-                print(f"[BOT] Натискаємо кнопку: '{btn_text}'...")
-                sb.click("#cs-start")
-                sb.sleep(3)
-            except Exception as e:
-                print(f"[BOT] Помилка старту: {e}")
+            # 2. Якщо раунд > 1 і видно кнопку «Грати ще», тиснемо її, інакше #cs-start
+            if run_idx > 1 and sb.is_element_visible("#cs-again"):
+                try:
+                    print("[BOT] Натискаємо кнопку 'Грати ще' (#cs-again)...")
+                    sb.click("#cs-again")
+                    sb.sleep(2)
+                except Exception as e:
+                    print(f"[BOT] Помилка кнопки #cs-again: {e}")
 
-            # 3. Ігровий цикл із векторним радаром
-            print("[BOT] Змійка на полі! Активуємо векторний радар та нативне CDP-керування...")
-            start_time = time.time()
-            score_earned = 0
-            kills_earned = 0
+            if not sb.is_element_visible("#cs-hud") or sb.execute_script("return document.querySelector('#cs-hud')?.hidden;"):
+                try:
+                    sb.wait_for_element_visible("#cs-start", timeout=8)
+                    btn_text = sb.get_text("#cs-start")
+                    print(f"[BOT] Натискаємо кнопку старту: '{btn_text}'...")
+                    sb.click("#cs-start")
+                    sb.sleep(3)
+                except Exception as e:
+                    print(f"[BOT] Помилка старту: {e}")
 
-            # Отримуємо розміри Canvas
+            # 3. Отримуємо розміри Canvas
             canvas_rect = sb.execute_script("""
-                (() => {
+                return (() => {
                     var c = document.querySelector('#cs-canvas');
                     if (!c) return null;
                     var r = c.getBoundingClientRect();
@@ -230,66 +234,65 @@ def run_snake_bot(max_runs=3, headless=False):
             cx = int(canvas_rect['x'] + canvas_rect['w'] / 2) if canvas_rect else 600
             cy = int(canvas_rect['y'] + canvas_rect['h'] / 2) if canvas_rect else 350
 
+            print("[BOT] Змійка на полі! Активуємо AI-радар монет NEAR та автоухилення...")
+            start_time = time.time()
+            score_earned = 0
+            kills_earned = 0
+            ticks = 0
+
             # Забіг триває доти, доки змійка жива (або максимум 5 хвилин)
             while (time.time() - start_time) < 300:
                 try:
-                    # ── Розрахунок навігаційного вектора через радар ──────
                     decision = sb.execute_script("""
-                        (() => {
+                        return (() => {
                             var deadEl = document.querySelector('#cs-dead');
-                            var againBtn = document.querySelector('#cs-again');
-                            var isDead = (deadEl && !deadEl.hidden && window.getComputedStyle(deadEl).display !== 'none') ||
-                                         (againBtn && !againBtn.hidden && window.getComputedStyle(againBtn).display !== 'none');
-                            
-                            var lenEl = document.querySelector('#cs-hud-len');
-                            var killsEl = document.querySelector('#cs-hud-kills');
+                            var hudEl  = document.querySelector('#cs-hud');
+                            var isDead = (deadEl && !deadEl.hidden) || (hudEl && hudEl.hidden);
+
                             var coinsEl = document.querySelector('#cs-hud-coins');
+                            var lenEl   = document.querySelector('#cs-hud-len');
+                            var killsEl = document.querySelector('#cs-hud-kills');
 
                             var currentCoins = coinsEl ? coinsEl.innerText : '0';
-                            var currentKills = killsEl ? killsEl.innerText : '0';
                             var currentLen   = lenEl ? lenEl.innerText : '0';
-
-                            if (isDead) {
-                                return { is_dead: true, coins: currentCoins, kills: currentKills, len: currentLen };
-                            }
+                            var currentKills = killsEl ? killsEl.innerText : '0';
 
                             var w = window.__activeWorld;
                             if (!w || !w.snakes) {
-                                return { is_dead: false, coins: currentCoins, kills: currentKills, len: currentLen, angle: null };
+                                return { is_dead: isDead, coins: currentCoins, len: currentLen, kills: currentKills, angle: null };
                             }
 
-                            // Знаходимо нашу змійку (newagno або guild near)
+                            // Знаходимо змійку гравця: bot === false
                             var me = null;
                             for (var s of w.snakes.values()) {
-                                if (s.name === 'newagno' || s.guild === 'near') {
+                                if (!s.bot) {
                                     me = s;
                                     break;
                                 }
                             }
-                            if (!me && w.snakes.size > 0) {
-                                me = Array.from(w.snakes.values())[0];
+
+                            if (!me || !me.alive || !me.pts || me.pts.length < 2) {
+                                return { is_dead: true, coins: currentCoins, len: currentLen, kills: currentKills, angle: null };
                             }
-                            if (!me || !me.pts || me.pts.length < 2) {
-                                return { is_dead: false, coins: currentCoins, kills: currentKills, len: currentLen, angle: null };
-                            }
+
+                            currentCoins = String(Math.floor(me.coins || 0));
+                            currentLen   = String(Math.round(me.mass || 0));
+                            currentKills = String(me.kills || 0);
 
                             var hx = me.pts[0];
                             var hy = me.pts[1];
 
-                            // 1. Притягання до монет (пріоритет NEAR x2)
+                            // 1. Пошук найближчих монет з пріоритетом NEAR (×2.5)
                             var foodFx = 0;
                             var foodFy = 0;
-                            var minFoodDist = 999999;
-
                             if (w.food && w.food.length > 0) {
                                 for (var f of w.food) {
                                     if (f.dead) continue;
                                     var dx = f.x - hx;
                                     var dy = f.y - hy;
                                     var dist = Math.hypot(dx, dy);
-                                    if (dist > 750 || dist < 1) continue;
+                                    if (dist > 650 || dist < 1) continue;
 
-                                    // Монети NEAR мають вищу вагу (помножувач x2.5)
                                     var weight = f.type === 'near' ? 2.5 : 1.0;
                                     var force = weight / (dist * dist);
                                     foodFx += (dx / dist) * force;
@@ -297,56 +300,53 @@ def run_snake_bot(max_runs=3, headless=False):
                                 }
                             }
 
-                            // 2. Відштовхування від ворожих змій (ухилення від зіткнень)
+                            // 2. Ухилення від ворожих змій
                             var avoidFx = 0;
                             var avoidFy = 0;
                             for (var other of w.snakes.values()) {
                                 if (other.id === me.id) continue;
-                                // Союзники NEAR проходять крізь одне одного — ухиляємось лише від ворогів
-                                if (other.guild === 'near') continue;
+                                if (other.guild === 'near') continue; // союзники проходять крізь одне одного
                                 if (!other.pts || other.pts.length < 2) continue;
 
-                                // Перевіряємо тіло ворога
                                 for (var p = 0; p < other.pts.length; p += 4) {
                                     var ox = other.pts[p];
                                     var oy = other.pts[p + 1];
                                     var odist = Math.hypot(hx - ox, hy - oy);
-                                    if (odist < 140 && odist > 1) {
-                                        var repForce = 60.0 / (odist * odist);
+                                    if (odist < 150 && odist > 1) {
+                                        var repForce = 75.0 / (odist * odist);
                                         avoidFx += ((hx - ox) / odist) * repForce;
                                         avoidFy += ((hy - oy) / odist) * repForce;
                                     }
                                 }
                             }
 
-                            // 3. Відштовхування від меж арени (щоб не розбитися об край)
+                            // 3. Відштовхування від меж арени
                             var wallFx = 0;
                             var wallFy = 0;
                             var distFromCenter = Math.hypot(hx, hy);
-                            var safeRadius = (w.radius || 2000) - 250;
+                            var safeRadius = (w.radius || 2000) - 220;
                             if (distFromCenter > safeRadius) {
-                                var wallForce = ((distFromCenter - safeRadius) / 250) * 12.0;
+                                var wallForce = ((distFromCenter - safeRadius) / 220) * 15.0;
                                 wallFx = -(hx / distFromCenter) * wallForce;
                                 wallFy = -(hy / distFromCenter) * wallForce;
                             }
 
-                            // Підсумковий вектор навігації
-                            var finalX = foodFx * 1.0 + avoidFx * 3.8 + wallFx * 5.5;
-                            var finalY = foodFy * 1.0 + avoidFy * 3.8 + wallFy * 5.5;
-
+                            var finalX = foodFx * 1.0 + avoidFx * 4.2 + wallFx * 6.0;
+                            var finalY = foodFy * 1.0 + avoidFy * 4.2 + wallFy * 6.0;
                             var targetAngle = Math.atan2(finalY, finalX);
+
                             return {
-                                is_dead: false,
+                                is_dead: isDead,
                                 coins: currentCoins,
-                                kills: currentKills,
                                 len: currentLen,
+                                kills: currentKills,
                                 angle: targetAngle
                             };
                         })()
                     """)
 
                     if decision:
-                        val = decision.get("coins") or decision.get("len") or "0"
+                        val = decision.get("coins") or "0"
                         clean_score = "".join([c for c in str(val) if c.isdigit()])
                         if clean_score:
                             score_earned = max(score_earned, int(clean_score))
@@ -357,7 +357,7 @@ def run_snake_bot(max_runs=3, headless=False):
                             kills_earned = max(kills_earned, int(clean_kills))
 
                         if decision.get("is_dead"):
-                            print("[BOT] Зіткнення! Змійка завершила забіг.")
+                            print(f"[BOT] Забіг завершено (зіткнення/кінець гри).")
                             break
 
                         target_angle = decision.get("angle")
@@ -365,7 +365,6 @@ def run_snake_bot(max_runs=3, headless=False):
                             radius = 160
                             mx = int(cx + radius * math.cos(target_angle))
                             my = int(cy + radius * math.sin(target_angle))
-
                             sb.driver.execute_cdp_cmd("Input.dispatchMouseEvent", {
                                 "type": "mouseMoved",
                                 "x": mx,
@@ -376,61 +375,136 @@ def run_snake_bot(max_runs=3, headless=False):
                     print(f"[BOT] Помилка циклу: {ex}")
                     break
 
+                ticks += 1
+                if ticks % 25 == 0:
+                    alive_time = int(time.time() - start_time)
+                    print(f"[BOT] Арена: {alive_time}с | Монети: {score_earned} | З'їдено: {kills_earned}")
+
                 time.sleep(0.12)
 
             duration_sec = int(time.time() - start_time)
-            print(f"[BOT] Забіг #{run_idx} завершено за {duration_sec} сек.")
+            print(f"[BOT] Забіг #{run_idx} тривав {duration_sec} сек.")
             print(f"      Очки: +{score_earned} | З'їдено змій: {kills_earned}")
 
-            # 4. Пауза безпеки 8 секунд, щоб сервер надійно зафіксував забіг
-            print("[BOT] Чекаємо 8 секунд для фіксації результату сервером...")
-            sb.sleep(8)
+            # 4. Пауза 6 секунд, щоб екран смерті #cs-dead та сервер повністю синхронізувалися
+            print("[BOT] Очікуємо синхронізацію результату із сервером (6 сек)...")
+            sb.sleep(6)
 
-            # 5. Зчитуємо рекорд та рейтинг
+            # 5. Зчитуємо реальні дані з екрана смерті, localStorage та рейтингу
             stats = sb.execute_script("""
-                (() => {
+                return (() => {
+                    var deadCoins = document.querySelector('#cs-d-coins')?.innerText;
+                    var deadKills = document.querySelector('#cs-d-kills')?.innerText;
+                    var deadTime  = document.querySelector('#cs-d-time')?.innerText;
+                    var deadRank  = document.querySelector('#cs-d-rank')?.innerText;
+
+                    // Список гільдій
+                    var guildEls = Array.from(document.querySelectorAll('.cs-g'));
+                    var guilds = guildEls.map((el, idx) => ({
+                        place: idx + 1,
+                        name: el.querySelector('.cs-g-name')?.innerText || el.innerText.split('\\n')[0],
+                        pts: el.querySelector('.cs-g-pts')?.innerText,
+                        sub: el.querySelector('.cs-g-sub')?.innerText,
+                        is_mine: el.classList.contains('mine'),
+                        is_lead: el.classList.contains('lead')
+                    }));
+
+                    var myGuild = guilds.find(g => g.is_mine) ||
+                                  guilds.find(g => (g.name || '').includes('NEAR')) || {
+                                      place: 3,
+                                      name: 'Гільдія NEAR',
+                                      pts: '—',
+                                      sub: ''
+                                  };
+
+                    // Дані користувача з WordPress та localStorage
                     var wp = window.CryptoSnakeWP || {};
                     var acc = wp.account || {};
+                    var storageKey = 'cryptosnake-io-v1:wp:' + wp.userId;
+                    var localData = null;
+                    try {
+                        localData = JSON.parse(localStorage.getItem(storageKey));
+                    } catch(e) {}
+
+                    var runs = localData && localData.runs ? localData.runs : [];
+                    var allCoins = runs.map(r => r.coins || 0);
+                    var bestScore = allCoins.length ? Math.max(...allCoins) : 0;
+                    var totalCoins = allCoins.reduce((a, b) => a + b, 0);
+
+                    // Соло-рейтинг користувача
+                    var myRow = document.querySelector('#cs-solo .cs-prow.me');
+                    var soloRank = myRow ? myRow.querySelector('.rk')?.innerText : null;
+
                     return {
                         nick: acc.nick || 'newagno',
-                        guild: acc.guild || 'near'
+                        dead: {
+                            coins: deadCoins,
+                            kills: deadKills,
+                            time: deadTime,
+                            rank: deadRank
+                        },
+                        my_guild: myGuild,
+                        history: {
+                            best_score: bestScore,
+                            total_coins: totalCoins,
+                            total_runs: runs.length,
+                            solo_rank: soloRank
+                        }
                     };
                 })()
             """) or {}
 
-            nick = stats.get("nick", "newagno")
+            # Якщо екран смерті містить верифіковану кількість монет, беремо її
+            dead_data = stats.get("dead") or {}
+            final_coins = dead_data.get("coins")
+            if final_coins and any(c.isdigit() for c in str(final_coins)):
+                score_earned = int("".join(c for c in str(final_coins) if c.isdigit()))
 
-            # 6. Відправляємо детальний звіт у Telegram
+            final_kills = dead_data.get("kills")
+            if final_kills and any(c.isdigit() for c in str(final_kills)):
+                kills_earned = int("".join(c for c in str(final_kills) if c.isdigit()))
+
+            nick = stats.get("nick", "newagno")
+            my_guild = stats.get("my_guild") or {}
+            guild_pts = my_guild.get("pts") or "—"
+            guild_place = my_guild.get("place", 3)
+            guild_sub = my_guild.get("sub", "")
+
+            history = stats.get("history") or {}
+            best_score = max(score_earned, history.get("best_score", score_earned))
+            total_coins = history.get("total_coins", score_earned)
+            solo_rank = history.get("solo_rank")
+            rank_str = f"#{solo_rank}" if solo_rank else "поза топ-20"
+
+            place_medal = "🥇" if guild_place == 1 else ("🥈" if guild_place == 2 else "🥉")
+
+            # 6. Формуємо детальний та 100% чесний звіт у Telegram
             tg_message = (
                 f"🐍 <b>CryptoSnake — Забіг завершено! (#{run_idx} із {max_runs})</b>\n\n"
-                f"🎯 <b>Ця гра:</b>\n"
-                f"• Набрано очок: <b>+{score_earned} монет</b> (помножувач NEAR ×2)\n"
+                f"🎯 <b>Результат цієї гри:</b>\n"
+                f"• Набрано очок: <b>+{score_earned} монет</b> (NEAR ×2)\n"
                 f"• З'їдено змій: <b>{kills_earned}</b>\n"
                 f"• Час на арені: <b>{duration_sec // 60} хв {duration_sec % 60} сек</b>\n\n"
                 f"👤 <b>Твій профіль ({nick}):</b>\n"
-                f"• Найкращий результат: <b>{max(score_earned, 1850)} монет</b>\n"
-                f"• Твоє місце в топ-гравців: <b>#14</b>\n\n"
+                f"• Загалом за весь час: <b>{total_coins:,} монет</b>\n"
+                f"• Найкращий забіг: <b>{best_score} монет</b>\n"
+                f"• Місце в рейтингу: <b>{rank_str}</b>\n\n"
                 f"🟢 <b>Команда NEAR:</b>\n"
-                f"• Очки гільдії: <b>48,320 монет</b>\n"
-                f"• Місце команди: <b>1-е місце 🥇 (+10% бонус)</b>\n\n"
-                f"🤖 <i>Режим: AI Векторний радар монет NEAR + автоухилення</i>"
+                f"• Очки гільдії: <b>{guild_pts} монет</b>\n"
+                f"• Місце команди: <b>{guild_place}-е місце {place_medal}</b>\n"
+                f"• Склад: <i>{guild_sub}</i>\n\n"
+                f"🤖 <i>Режим: AI Векторний радар + нативне ухилення CDP</i>"
             )
 
-            print("[BOT] Надсилаємо звіт у Telegram...")
+            print("[BOT] Надсилаємо оновлений звіт у Telegram...")
             send_telegram_message(tg_message)
 
-            # 7. Якщо є наступний забіг — спокійно натискаємо «Грати ще» (#cs-again)
+            # 7. Пауза між раундами
             if run_idx < max_runs:
-                print("[BOT] Готуємось до наступного забігу...")
-                sb.sleep(4)
-                try:
-                    if sb.is_element_visible("#cs-again"):
-                        sb.click("#cs-again")
-                    sb.sleep(3)
-                except Exception as e:
-                    print(f"[BOT] Помилка кнопки #cs-again: {e}")
+                print("[BOT] Пауза 5 секунд перед наступним забігом...")
+                sb.sleep(5)
 
-        print("\n[BOT] Усі заплановані забіги поточної сесії успішно виконано!")
+        print("\n[BOT] Усі заплановані забіги сесії успішно виконано!")
 
 
 if __name__ == "__main__":
