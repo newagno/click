@@ -10,8 +10,13 @@ if cookie_file.exists():
     now = time.time()
     clean_cookies = []
     for c in cookies:
+        name = c["name"]
+        # Skip Cloudflare clearance and bot tokens: they are bound to the specific browser & OS
+        # where they were generated. Injecting Windows cf_clearance into Linux triggers Turnstile!
+        if name.lower() in ("cf_clearance", "__cf_bm", "_cfuvid", "cf_chl_prog"):
+            continue
         item = {
-            "name": c["name"],
+            "name": name,
             "value": c["value"],
             "domain": c.get("domain", ".incrypted.com"),
             "path": c.get("path", "/"),

@@ -32,14 +32,19 @@ except ImportError:
 
 
 def format_proxy(proxy_str: str) -> str | None:
-    """Format proxy string for SeleniumBase (username:password@host:port or host:port)."""
+    """Format proxy string for SeleniumBase (username:password@host:port or host:port).
+    Supports both user:pass@host:port and host:port:user:pass formats.
+    """
     if not proxy_str:
         return None
     s = proxy_str.strip()
-    if s.startswith("http://"):
-        s = s[7:]
-    elif s.startswith("https://"):
-        s = s[8:]
+    for prefix in ("http://", "https://"):
+        if s.startswith(prefix):
+            s = s[len(prefix):]
+    # Handle host:port:user:pass format from providers
+    if "@" not in s and s.count(":") == 3:
+        parts = s.split(":")
+        return f"{parts[2]}:{parts[3]}@{parts[0]}:{parts[1]}"
     return s if s else None
 
 
@@ -49,8 +54,10 @@ def is_proxy_working(proxy_raw: str, timeout: int = 7) -> bool:
         return False
     import requests
     try:
-        p = proxy_raw.strip()
-        proxy_url = p if "://" in p else f"http://{p}"
+        clean = format_proxy(proxy_raw)
+        if not clean:
+            return False
+        proxy_url = f"http://{clean}"
         proxies = {"http": proxy_url, "https": proxy_url}
         resp = requests.get(
             "https://1.1.1.1",
@@ -96,6 +103,11 @@ def inject_cookie_safely(driver, c: dict) -> bool:
     val = c.get("value")
     if not name or val is None:
         return False
+
+    # Skip Cloudflare clearance and bot tokens: they are bound to the specific browser & OS
+    # where they were generated. Injecting Windows cf_clearance into Linux triggers Turnstile!
+    if name.lower() in ("cf_clearance", "__cf_bm", "_cfuvid", "cf_chl_prog"):
+        return True
 
     now = time.time()
     clean = {
@@ -146,6 +158,50 @@ def inject_cookie_safely(driver, c: dict) -> bool:
         return False
 
 
+def wait_for_bypass(sb, target_url="https://incrypted.com/cryptosnake/", timeout=50) -> bool:
+    """Click the Turnstile checkbox until it clears.
+    In UC mode: do NOT make CDP calls (execute_script, get_text) while Turnstile is active.
+    Only click the captcha and check title afterwards.
+    """
+    deadline = timeout
+    step = 5
+    waited = 0
+    reconnects = 0
+    while waited < deadline:
+        try:
+            title = sb.get_title().lower()
+            if "just a moment" not in title and "cloudflare" not in title:
+                print(f"[CF] Перевірку Cloudflare пройдено (заголовок: '{sb.get_title()}')!")
+                return True
+        except Exception:
+            pass
+
+        print(f"[CF] Очікуємо проходження Turnstile ({waited}s / {deadline}s)...")
+        try:
+            sb.uc_gui_click_captcha()
+        except Exception as e:
+            print(f"[CF] Спроба кліку: {e}")
+
+        sb.sleep(step)
+        waited += step
+
+        # Every 15s refresh challenge with UC reconnect
+        if waited % 15 == 0 and reconnects < 3:
+            reconnects += 1
+            print(f"[CF] Перепідключення #{reconnects} для оновлення виклику...")
+            try:
+                sb.uc_open_with_reconnect(target_url, reconnect_time=4)
+                sb.sleep(3)
+            except Exception as e:
+                print(f"[CF] Помилка uc_open_with_reconnect: {e}")
+
+    try:
+        title = sb.get_title().lower()
+        return "just a moment" not in title and "cloudflare" not in title
+    except Exception:
+        return False
+
+
 def ensure_authenticated(sb):
     """Loads existing cookies or logs in automatically via .env credentials."""
     email = os.getenv("INCRYPTED_EMAIL")
@@ -157,16 +213,8 @@ def ensure_authenticated(sb):
     sb.sleep(3)
 
     # Якщо заголовок "Just a moment...", очікуємо і клікаємо Turnstile
-    for attempt in range(8):
-        cur_title = sb.get_title()
-        if "Just a moment" not in cur_title and "Cloudflare" not in cur_title:
-            break
-        print(f"[AUTH] Виявлено Cloudflare Turnstile ('{cur_title}'). Очікуємо проходження ({attempt + 1}/8)...")
-        try:
-            sb.uc_gui_click_captcha()
-        except Exception as e_cf:
-            print(f"[AUTH] uc_gui_click_captcha: {e_cf}")
-        sb.sleep(3)
+    if not wait_for_bypass(sb, target_url=BASE_URL, timeout=40):
+        print("[AUTH] ⚠️ Не вдалося пройти перевірку на головній сторінці за 40 сек.")
 
     cur_url = sb.get_current_url()
     cur_title = sb.get_title()
@@ -194,12 +242,12 @@ def ensure_authenticated(sb):
             print(f"[AUTH] Не вдалося прочитати {COOKIE_FILE.name}: {e}")
 
     if cookies:
-        print(f"[AUTH] Інжектуємо {len(cookies)} куків із {source}...")
+        print(f"[AUTH] Інжектуємо куки із {source} (без cf_clearance)...")
         added = 0
         for c in cookies:
             if inject_cookie_safely(sb.driver, c):
                 added += 1
-        print(f"[AUTH] Успішно інжектовано {added}/{len(cookies)} куків.")
+        print(f"[AUTH] Успішно інжектовано {added} куків.")
         return True
 
     # 3. Якщо куків немає, виконуємо вхід за email + password
@@ -269,17 +317,13 @@ def run_snake_bot(max_runs=3, headless=False):
         sb.sleep(4)
 
         # Перевірка наявності canvas гри та вирішення Cloudflare за потреби
-        for attempt in range(10):
+        if not wait_for_bypass(sb, target_url=GAME_URL, timeout=45):
+            print("[BOT] ⚠️ Попередження: сторінка гри все ще може перебувати під перевіркою Cloudflare.")
+
+        for _ in range(8):
             has_canvas = sb.execute_script("return !!document.querySelector('#cs-canvas');")
             if has_canvas:
                 break
-            page_title = sb.get_title()
-            print(f"[BOT] Очікуємо завантаження арени (Title: '{page_title}', спроба {attempt + 1}/10)...")
-            if "Just a moment" in page_title or "Cloudflare" in page_title:
-                try:
-                    sb.uc_gui_click_captcha()
-                except Exception as e_cf:
-                    print(f"[BOT] uc_gui_click_captcha: {e_cf}")
             sb.sleep(2)
 
         # Перевірка стану акаунта в грі

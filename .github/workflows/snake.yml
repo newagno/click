@@ -51,11 +51,22 @@ jobs:
         env:
           RESIDENTIAL_PROXY: ${{ secrets.RESIDENTIAL_PROXY }}
         run: |
-          if [ -n "$RESIDENTIAL_PROXY" ]; then
-            code=$(curl -x "$RESIDENTIAL_PROXY" -s -o /dev/null -w "%{http_code}" https://1.1.1.1 --max-time 15 || echo FAIL)
-            echo "curl via proxy → $code"
-            if [ "$code" = "FAIL" ]; then echo "::warning::Proxy unreachable from runner"; fi
-          fi
+          python -c "
+          import os, sys
+          sys.path.insert(0, '.')
+          from src.snake.bot import format_proxy, is_proxy_working
+          raw = os.getenv('RESIDENTIAL_PROXY')
+          if raw:
+              clean = format_proxy(raw)
+              host_disp = clean.split('@')[-1] if clean else 'invalid'
+              print(f'[*] Testing proxy: {host_disp}...')
+              ok = is_proxy_working(raw, timeout=10)
+              print(f'[*] Proxy reachable: {ok}')
+              if not ok:
+                  print('::warning::Proxy check failed (407 Auth or Timeout). Bot will attempt direct connection or Turnstile bypass.')
+          else:
+              print('[*] No RESIDENTIAL_PROXY configured')
+          "
 
       - name: Run CryptoSnake Bot
         env:
