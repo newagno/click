@@ -390,11 +390,23 @@ def run_snake_bot(max_runs=3, headless=False):
         for run_idx in range(1, max_runs + 1):
             print(f"\n{'='*25} РАУНД #{run_idx} із {max_runs} {'='*25}")
 
-            # 1. Якщо раунд > 1 і видно кнопку «Грати ще», тиснемо її
+            # Перевірка чи вікно все ще відкрите
+            try:
+                sb.execute_script("return !!document.body;")
+            except Exception as e_win:
+                print(f"[BOT] Вікно браузера закрите або не відповідає ({e_win}). Зупинка сесії.")
+                break
+
+            # 1. Якщо раунд > 1: повертаємося в головне меню через кнопку #cs-change
             if run_idx > 1:
                 try:
-                    sb.execute_script("document.querySelector('#cs-again')?.click();")
-                    sb.sleep(2)
+                    sb.execute_script("""
+                        var changeBtn = document.querySelector('#cs-change');
+                        if (changeBtn && !changeBtn.hidden) {
+                            changeBtn.click();
+                        }
+                    """)
+                    sb.sleep(3)
                 except Exception:
                     pass
 
@@ -425,7 +437,7 @@ def run_snake_bot(max_runs=3, headless=False):
             btn_info = sb.execute_script("""
                 var btn = document.querySelector('#cs-start');
                 return { text: btn?.innerText, disabled: btn?.disabled };
-            """)
+            """) or {}
             print(f"[BOT] Кнопка старту: '{btn_info.get('text')}' (disabled={btn_info.get('disabled')}). Тиснемо...")
             sb.execute_script("document.querySelector('#cs-start')?.click();")
             sb.sleep(2)
@@ -452,7 +464,7 @@ def run_snake_bot(max_runs=3, headless=False):
             # 6. Очікуємо, поки гра ДІЙСНО перейде в стан бою (HUD активний)
             print("[BOT] Очікуємо активацію арени (поява HUD)...")
             game_active = False
-            for _ in range(12):
+            for check_i in range(25):
                 hud_active = sb.execute_script("""
                     var hud = document.querySelector('#cs-hud');
                     return hud && !hud.hidden;
@@ -460,6 +472,27 @@ def run_snake_bot(max_runs=3, headless=False):
                 if hud_active:
                     game_active = True
                     break
+
+                # Перевіряємо статус попередження (кулдаун попереднього забігу)
+                status_text = sb.execute_script("""
+                    return (document.querySelector('#cs-season-status')?.innerText ||
+                            document.querySelector('#cs-run-warning')?.innerText || '');
+                """)
+                if "активний забіг" in status_text.lower():
+                    print(f"[BOT] ⏳ Сервер утримує сесію попереднього забігу. Очікуємо завершення кулдауну ({check_i+1}/25)...")
+                    sb.sleep(4)
+                    sb.execute_script("""
+                        var btn = document.querySelector('#cs-start');
+                        if (btn && !btn.disabled) { btn.click(); }
+                    """)
+                    continue
+
+                # Якщо з'явилося попередження або кнопка старту все ще активна, пробуємо натиснути ще раз
+                if check_i in (3, 7):
+                    sb.execute_script("""
+                        var btn = document.querySelector('#cs-start');
+                        if (btn && !btn.disabled) { btn.click(); }
+                    """)
                 sb.sleep(1)
 
             if not game_active:
@@ -470,7 +503,7 @@ def run_snake_bot(max_runs=3, headless=False):
                         btnText: document.querySelector('#cs-start')?.innerText,
                         btnDisabled: document.querySelector('#cs-start')?.disabled,
                         hasPopup: !!document.querySelector('.incr-popup-login'),
-                        warn: document.querySelector('#cs-run-warning')?.innerText
+                        warn: document.querySelector('#cs-run-warning')?.innerText || document.querySelector('#cs-season-status')?.innerText
                     };
                 """) or {}
                 print(f"[BOT] ПОМИЛКА: Гра не перейшла в режим бою. Діагностика: {diag}")
@@ -510,9 +543,10 @@ def run_snake_bot(max_runs=3, headless=False):
             score_earned = 0
             kills_earned = 0
             ticks = 0
+            max_duration = 600  # До 10 хвилин виживання
 
-            # Забіг триває доти, доки змійка жива (або максимум 5 хвилин)
-            while (time.time() - start_time) < 300:
+            # Забіг триває доти, доки змійка жива (або максимум 10 хвилин)
+            while (time.time() - start_time) < max_duration:
                 try:
                     decision = sb.execute_script("""
                         return (() => {
@@ -562,7 +596,7 @@ def run_snake_bot(max_runs=3, headless=False):
                             var hx = me.pts[0];
                             var hy = me.pts[1];
 
-                            // 1. Пошук найближчих монет з пріоритетом NEAR (×2.5)
+                            // 1. Пошук найближчих монет з пріоритетом NEAR (×3.0)
                             var foodFx = 0;
                             var foodFy = 0;
                             if (w.food && w.food.length > 0) {
@@ -573,16 +607,17 @@ def run_snake_bot(max_runs=3, headless=False):
                                     var dist = Math.hypot(dx, dy);
                                     if (dist > 650 || dist < 1) continue;
 
-                                    var weight = f.type === 'near' ? 2.5 : 1.0;
+                                    var weight = f.type === 'near' ? 3.0 : 1.0;
                                     var force = weight / (dist * dist);
                                     foodFx += (dx / dist) * force;
                                     foodFy += (dy / dist) * force;
                                 }
                             }
 
-                            // 2. Ухилення від ворожих змій
+                            // 2. Ухилення від ворожих змій з підвищеною зоною безпеки
                             var avoidFx = 0;
                             var avoidFy = 0;
+                            var minEnemyDist = 9999;
                             for (var other of w.snakes.values()) {
                                 if (other.id === me.id) continue;
                                 if (other.guild === 'near') continue; // союзники проходять крізь одне одного
@@ -592,8 +627,12 @@ def run_snake_bot(max_runs=3, headless=False):
                                     var ox = other.pts[p];
                                     var oy = other.pts[p + 1];
                                     var odist = Math.hypot(hx - ox, hy - oy);
-                                    if (odist < 150 && odist > 1) {
-                                        var repForce = 75.0 / (odist * odist);
+                                    if (odist < minEnemyDist) minEnemyDist = odist;
+
+                                    // Збільшена зона безпеки (220px) та підвищена небезпека від голови ворога
+                                    if (odist < 220 && odist > 1) {
+                                        var headMultiplier = (p === 0) ? 2.5 : 1.0;
+                                        var repForce = (90.0 * headMultiplier) / (odist * odist);
                                         avoidFx += ((hx - ox) / odist) * repForce;
                                         avoidFy += ((hy - oy) / odist) * repForce;
                                     }
@@ -604,15 +643,18 @@ def run_snake_bot(max_runs=3, headless=False):
                             var wallFx = 0;
                             var wallFy = 0;
                             var distFromCenter = Math.hypot(hx, hy);
-                            var safeRadius = (w.radius || 2000) - 220;
+                            var safeRadius = (w.radius || 2000) - 250;
                             if (distFromCenter > safeRadius) {
-                                var wallForce = ((distFromCenter - safeRadius) / 220) * 15.0;
+                                var wallForce = ((distFromCenter - safeRadius) / 250) * 20.0;
                                 wallFx = -(hx / distFromCenter) * wallForce;
                                 wallFy = -(hy / distFromCenter) * wallForce;
                             }
 
-                            var finalX = foodFx * 1.0 + avoidFx * 4.2 + wallFx * 6.0;
-                            var finalY = foodFy * 1.0 + avoidFy * 4.2 + wallFy * 6.0;
+                            // При наближенні ворога (<180px) пригнічуємо жадібність до монет заради виживання
+                            var foodWeight = minEnemyDist < 180 ? 0.2 : 1.0;
+
+                            var finalX = foodFx * foodWeight + avoidFx * 5.0 + wallFx * 7.0;
+                            var finalY = foodFy * foodWeight + avoidFy * 5.0 + wallFy * 7.0;
                             var targetAngle = Math.atan2(finalY, finalX);
 
                             return {
