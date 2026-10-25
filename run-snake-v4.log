@@ -1,0 +1,58 @@
+[*] Запуск бота CryptoSnake на 1 забігів (headless=False)...
+[BOT] Перевірка доступності проксі-сервера...
+[BOT] Проксі перевірено та активовано: 46.203.196.7:5453
+============================================================
+[BOT] Запуск інтелектуального бота CryptoSnake
+      Цільова команда : NEAR (бонус ×2)
+      Режим зору      : Векторний радар рушія + нативне CDP-керування
+      Кількість ігор  : 1
+      Браузер         : C:\Program Files\BraveSoftware\Brave-Browser\Application\brave.exe
+============================================================
+[AUTH] Ініціалізація браузера на домені...
+[CF] Перевірку Cloudflare пройдено (заголовок: 'INCRYPTED - Все о Блокчейн и Криптовалютах')!
+[AUTH] Поточний URL: https://incrypted.com/ | Заголовок: 'INCRYPTED - Все о Блокчейн и Криптовалютах'
+[AUTH] Інжектуємо куки із файлу incrypted_cookies.json (без cf_clearance)...
+[AUTH] Успішно інжектовано 15 куків.
+[CF] Перевірку Cloudflare пройдено (заголовок: 'КриптоЗмійка')!
+[AUTH] Сесію підтверджено через куки (userId=255654).
+
+[BOT] Сторінка гри https://incrypted.com/cryptosnake/ вже відкрита та верифікована.
+
+[BOT] 🚨 КРИТИЧНА ПОМИЛКА СЕСІЇ: Message: Active window was already closed!
+
+Traceback (most recent call last):
+  File "C:\D\Learn\1PROJECTS\click\src\snake\bot.py", line 940, in run_snake_bot
+    _run_snake_bot_impl(max_runs=max_runs, headless=headless)
+    ~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\D\Learn\1PROJECTS\click\src\snake\bot.py", line 421, in _run_snake_bot_impl
+    has_canvas = sb.execute_script("return !!document.querySelector('#cs-canvas');")
+  File "C:\D\Learn\1PROJECTS\click\venv_new\Lib\site-packages\seleniumbase\fixtures\base_case.py", line 3523, in execute_script
+    self._check_browser()
+    ~~~~~~~~~~~~~~~~~~~^^
+  File "C:\D\Learn\1PROJECTS\click\venv_new\Lib\site-packages\seleniumbase\fixtures\base_case.py", line 10108, in _check_browser
+    raise NoSuchWindowException("Active window was already closed!")
+selenium.common.exceptions.NoSuchWindowException: Message: Active window was already closed!
+
+[NOTIFIER] Повідомлення в Telegram успішно надіслано!
+Traceback (most recent call last):
+  File "<string>", line 1, in <module>
+    import runpy, sys; sys.stdout = open('run-snake-v4.log', 'w', encoding='utf-8'); sys.stderr = sys.stdout; runpy.run_path('src/snake/run.py', run_name='__main__')
+                                                                                                              ~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "<frozen runpy>", line 294, in run_path
+  File "<frozen runpy>", line 98, in _run_module_code
+  File "<frozen runpy>", line 88, in _run_code
+  File "src/snake/run.py", line 23, in <module>
+    run_snake_bot(max_runs=max_runs, headless=headless)
+    ~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\D\Learn\1PROJECTS\click\src\snake\bot.py", line 940, in run_snake_bot
+    _run_snake_bot_impl(max_runs=max_runs, headless=headless)
+    ~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\D\Learn\1PROJECTS\click\src\snake\bot.py", line 421, in _run_snake_bot_impl
+    has_canvas = sb.execute_script("return !!document.querySelector('#cs-canvas');")
+  File "C:\D\Learn\1PROJECTS\click\venv_new\Lib\site-packages\seleniumbase\fixtures\base_case.py", line 3523, in execute_script
+    self._check_browser()
+    ~~~~~~~~~~~~~~~~~~~^^
+  File "C:\D\Learn\1PROJECTS\click\venv_new\Lib\site-packages\seleniumbase\fixtures\base_case.py", line 10108, in _check_browser
+    raise NoSuchWindowException("Active window was already closed!")
+selenium.common.exceptions.NoSuchWindowException: Message: Active window was already closed!
+
