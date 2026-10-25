@@ -34,18 +34,22 @@ except ImportError:
 def format_proxy(proxy_str: str) -> str | None:
     """Format proxy string for SeleniumBase (username:password@host:port or host:port).
     Supports both user:pass@host:port and host:port:user:pass formats.
+    Strips protocols, trailing slashes, and path components.
     """
     if not proxy_str:
         return None
     s = proxy_str.strip()
-    for prefix in ("http://", "https://"):
+    for prefix in ("http://", "https://", "socks5://", "socks4://"):
         if s.startswith(prefix):
             s = s[len(prefix):]
+    # Strip trailing slashes or path parameters (e.g. host:port/ or user:pass@host:port/)
+    s = s.split("/")[0].strip()
     # Handle host:port:user:pass format from providers
     if "@" not in s and s.count(":") == 3:
         parts = s.split(":")
         return f"{parts[2]}:{parts[3]}@{parts[0]}:{parts[1]}"
     return s if s else None
+
 
 
 def is_proxy_working(proxy_raw: str, timeout: int = 7) -> bool:
@@ -281,8 +285,9 @@ def ensure_authenticated(sb):
     return False
 
 
-def run_snake_bot(max_runs=3, headless=False):
+def _run_snake_bot_impl(max_runs=3, headless=False):
     binary = get_binary_path()
+
     proxy_raw = os.getenv("RESIDENTIAL_PROXY", "")
     proxy_clean = format_proxy(proxy_raw)
 
@@ -829,7 +834,30 @@ def run_snake_bot(max_runs=3, headless=False):
         print("\n[BOT] Усі заплановані забіги сесії успішно виконано!")
 
 
+def run_snake_bot(max_runs=3, headless=False):
+    """Wrapper that catches any unexpected startup/runtime crashes and sends Telegram alert."""
+    try:
+        _run_snake_bot_impl(max_runs=max_runs, headless=headless)
+    except Exception as e:
+        print(f"\n[BOT] 🚨 КРИТИЧНА ПОМИЛКА СЕСІЇ: {e}")
+        import traceback
+        traceback.print_exc()
+        try:
+            err_line = str(e).strip()
+            if "\n" in err_line:
+                err_line = err_line.split("\n")[0]
+            send_telegram_message(
+                f"🚨 <b>CryptoSnake — Помилка запуску бота!</b>\n\n"
+                f"• Помилка: <code>{err_line[:300]}</code>\n"
+                f"• Статус: сесія була перервана до завершення забігів."
+            )
+        except Exception as e_tg:
+            print(f"[NOTIFIER] Помилка надсилання сповіщення про збій: {e_tg}")
+        raise
+
+
 if __name__ == "__main__":
+
     runs = 3
     if len(sys.argv) > 1:
         try:
