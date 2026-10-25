@@ -363,11 +363,14 @@ def format_snake_tg_report(
     )
 
 
+PATH_SAFE_CONE_DEG = 30.0
+PATH_SAFE_CONE_RAD = math.radians(PATH_SAFE_CONE_DEG)
+
+
 def is_session_timeout(elapsed: float, is_ci: bool) -> bool:
-    """Hard watchdog check for CI runs (cutoff at 3000s / 50 min)."""
-    if is_ci and elapsed >= 3000:
-        return True
-    return False
+    """Hard watchdog check for runs (cutoff at limit + 60s buffer for sync/reporting)."""
+    limit = 2100 if is_ci else 2400
+    return elapsed >= (limit + 60)
 
 
 def calculate_avoid_radius(mass: float) -> float:
@@ -404,7 +407,7 @@ def check_path_safe_angle(hx: float, hy: float, cx: float, cy: float, ex: float,
     path_angle = math.atan2(cy - hy, cx - hx)
     enemy_angle = math.atan2(ey - hy, ex - hx)
     angle_diff = abs(((enemy_angle - path_angle + math.pi) % (2 * math.pi)) - math.pi)
-    return angle_diff >= (math.pi / 6)
+    return angle_diff >= PATH_SAFE_CONE_RAD
 
 
 def wait_for_bypass(sb, target_url="https://incrypted.com/cryptosnake/", timeout=50) -> bool:
@@ -1007,7 +1010,8 @@ def _run_snake_bot_impl(max_runs=3, headless=False):
                                     for (var other of w.snakes.values()) {
                                         if (other.id === me.id || other.guild === 'near') continue;
                                         if (!other.pts || other.pts.length < 2) continue;
-                                        for (var p = 0; p < other.pts.length; p += 4) {
+                                        var step = other.pts.length > 40 ? 4 : 2;
+                                        for (var p = 0; p < other.pts.length; p += step) {
                                             var ox = other.pts[p], oy = other.pts[p + 1];
                                             var enemyDist = Math.hypot(ox - hx, oy - hy);
                                             if (enemyDist > bestCluster.dist) continue;
@@ -1022,8 +1026,8 @@ def _run_snake_bot_impl(max_runs=3, headless=False):
                                     }
                                 }
 
-                                // Притягання до кластера діє ТІЛЬКИ коли шлях безпечний!
-                                if (bestCluster && bestCluster.dist > 1 && isPathSafe) {
+                                // Притягання до кластера для звичайного руху (ухилення avoidFx безпечно огинає ворогів)
+                                if (bestCluster && bestCluster.dist > 1) {
                                     var cDist = bestCluster.dist;
                                     var cForce = (bestCluster.mass / (cDist * cDist)) * 1.0;
                                     clusterFx = ((bestCluster.x - hx) / cDist) * cForce;
@@ -1040,7 +1044,8 @@ def _run_snake_bot_impl(max_runs=3, headless=False):
                                     if (other.guild === 'near') continue; // союзники проходять крізь одне одного
                                     if (!other.pts || other.pts.length < 2) continue;
 
-                                    for (var p = 0; p < other.pts.length; p += 4) {
+                                    var step = other.pts.length > 40 ? 4 : 2;
+                                    for (var p = 0; p < other.pts.length; p += step) {
                                         var ox = other.pts[p];
                                         var oy = other.pts[p + 1];
                                         var odist = Math.hypot(hx - ox, hy - oy);
@@ -1092,17 +1097,8 @@ def _run_snake_bot_impl(max_runs=3, headless=False):
                                     foodWeight *= 0.5;
                                 }
 
-                                // М'яке відхилення від хаотичного ядра (< 450px) для великої змійки, якщо в ядрі немає великого кластера
-                                var coreFx = 0;
-                                var coreFy = 0;
-                                if (meMass > 1500 && distFromCenter < 450 && (!bestCluster || bestCluster.dist > 300)) {
-                                    var coreForce = ((450 - distFromCenter) / 450) * 4.0;
-                                    coreFx = (hx / (distFromCenter || 1)) * coreForce;
-                                    coreFy = (hy / (distFromCenter || 1)) * coreForce;
-                                }
-
-                                var finalX = foodFx * foodWeight + clusterFx * clusterWeight + avoidFx * 5.0 + wallFx * 7.5 + coreFx;
-                                var finalY = foodFy * foodWeight + clusterFy * clusterWeight + avoidFy * 5.0 + wallFy * 7.5 + coreFy;
+                                var finalX = foodFx * foodWeight + clusterFx * clusterWeight + avoidFx * 5.0 + wallFx * 7.5;
+                                var finalY = foodFy * foodWeight + clusterFy * clusterWeight + avoidFy * 5.0 + wallFy * 7.5;
                                 var targetAngle = Math.atan2(finalY, finalX);
 
                                 // 6. Умови для безпечного та прибуткового Boost (Turbo Vacuum Wave 3):
@@ -1201,8 +1197,8 @@ def _run_snake_bot_impl(max_runs=3, headless=False):
                                     stop_reason = f"наближення ворога ({min_enemy_dist:.0f}px < 200px)"
                                 elif dist_center > safe_radius:
                                     stop_reason = "наближення до стіни арени"
-                                elif me_mass < 100 or (boost_start_mass > 0 and me_mass < boost_start_mass * 0.5):
-                                    stop_reason = f"захист маси ({me_mass:.0f} < {max(100, boost_start_mass * 0.5):.0f})"
+                                elif me_mass < 100:
+                                    stop_reason = f"захист мінімальної маси ({me_mass:.0f} < 100)"
                                 elif not should_boost:
                                     stop_reason = "кластер зібрано / ціль зникла"
 

@@ -37,3 +37,9 @@ def test_path_safe_cone_angles():
     ex_outside = 100.0 * math.cos(math.radians(35))
     ey_outside = 100.0 * math.sin(math.radians(35))
     assert check_path_safe_angle(hx=0, hy=0, cx=200, cy=0, ex=ex_outside, ey=ey_outside) is True
+
+def test_path_safe_cone_constants():
+    from src.snake.bot import PATH_SAFE_CONE_DEG, PATH_SAFE_CONE_RAD
+    assert PATH_SAFE_CONE_DEG == 30.0
+    assert abs(PATH_SAFE_CONE_RAD - (math.pi / 6)) < 1e-6
+
