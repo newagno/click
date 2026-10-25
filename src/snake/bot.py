@@ -331,23 +331,24 @@ def format_snake_tg_report(
     score_earned: int,
     kills_earned: int,
     duration_sec: int,
-    boost_triggers_count: int,
     rec_line: str,
     nick: str,
     best_score: int,
     rank_str: str,
     guild_pts: str,
     guild_place: int,
-    guild_sub: str
+    guild_sub: str,
+    boost_triggers_count: int = 0
 ) -> str:
     place_medal = "🥇" if guild_place == 1 else ("🥈" if guild_place == 2 else "🥉")
+    boost_line = f"• Активацій Turbo Boost: <b>{boost_triggers_count}</b>\n" if boost_triggers_count > 0 else ""
     return (
         f"🐍 <b>CryptoSnake — Забіг завершено! (#{run_idx} із {max_runs})</b>\n\n"
         f"🎯 <b>Результат цієї гри:</b>\n"
         f"• Набрано очок: <b>+{score_earned:,} монет</b> (NEAR ×2)\n"
         f"• З'їдено змій: <b>{kills_earned}</b>\n"
         f"• Час на арені: <b>{duration_sec // 60} хв {duration_sec % 60} сек</b>\n"
-        f"• Активацій Turbo Boost: <b>{boost_triggers_count}</b>\n"
+        f"{boost_line}"
         f"• {rec_line}\n\n"
         f"👤 <b>Твій профіль ({nick}):</b>\n"
         f"• Офіційний рекорд: <b>{best_score:,} монет</b>\n"
@@ -1282,8 +1283,6 @@ def _run_snake_bot_impl(max_runs=3, headless=False):
                 total_coins = history.get("total_coins", score_earned)
                 solo_rank = history.get("solo_rank")
                 rank_str = f"#{solo_rank}" if solo_rank else "поза топ-20"
-
-                place_medal = "🥇" if guild_place == 1 else ("🥈" if guild_place == 2 else "🥉")
 
                 # 10. Формуємо детальний звіт у Telegram
                 tg_message = format_snake_tg_report(
