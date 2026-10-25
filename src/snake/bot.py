@@ -864,12 +864,23 @@ def _run_snake_bot_impl(max_runs=3, headless=False):
                     max_duration = int(os.getenv("MAX_DURATION", default_duration))
                     print(f"[BOT] Змійка на полі! Марафон на {max_duration // 60} хв: Turbo Vacuum (Space) + Smart Predator + Dynamic Walls...")
 
+                block_steering_on_unsafe = os.getenv("BLOCK_STEERING_ON_UNSAFE", "0") == "1"
+                enable_core_fx = os.getenv("ENABLE_CORE_FX", "0") == "1"
+                min_mass_for_boost = int(os.getenv("MIN_MASS_FOR_BOOST", "350"))
+                safe_eval(sb, f"""
+                    window.__blockSteeringOnUnsafe = {'true' if block_steering_on_unsafe else 'false'};
+                    window.__enableCoreFx = {'true' if enable_core_fx else 'false'};
+                    window.__minMassForBoost = {min_mass_for_boost};
+                """)
+
                 boost_active = False
                 boost_start_time = 0.0
                 boost_start_mass = 0.0
                 boost_cooldown_until = 0.0
                 boost_triggers_count = 0
                 path_safe_blocked_count = 0
+                path_safe_steering_blocked_count = 0
+                core_fx_activations = 0
                 max_cluster_seen = 0.0
 
                 # Забіг триває доти, доки змійка жива (або вичерпано час сесії)
@@ -1026,8 +1037,11 @@ def _run_snake_bot_impl(max_runs=3, headless=False):
                                     }
                                 }
 
-                                // Притягання до кластера для звичайного руху (ухилення avoidFx безпечно огинає ворогів)
-                                if (bestCluster && bestCluster.dist > 1) {
+                                var pathSafeSteeringBlocked = Boolean(bestCluster && bestCluster.dist > 1 && !isPathSafe);
+                                var blockSteeringOnUnsafe = Boolean(window.__blockSteeringOnUnsafe);
+
+                                // Притягання до кластера (якщо blockSteeringOnUnsafe вимкнено — руль діє завжди)
+                                if (bestCluster && bestCluster.dist > 1 && (!blockSteeringOnUnsafe || isPathSafe)) {
                                     var cDist = bestCluster.dist;
                                     var cForce = (bestCluster.mass / (cDist * cDist)) * 1.0;
                                     clusterFx = ((bestCluster.x - hx) / cDist) * cForce;
@@ -1044,8 +1058,8 @@ def _run_snake_bot_impl(max_runs=3, headless=False):
                                     if (other.guild === 'near') continue; // союзники проходять крізь одне одного
                                     if (!other.pts || other.pts.length < 2) continue;
 
-                                    var step = other.pts.length > 40 ? 4 : 2;
-                                    for (var p = 0; p < other.pts.length; p += step) {
+                                    // Крок p += 4 зберігає первинне калібрування сили ухилення (I3)
+                                    for (var p = 0; p < other.pts.length; p += 4) {
                                         var ox = other.pts[p];
                                         var oy = other.pts[p + 1];
                                         var odist = Math.hypot(hx - ox, hy - oy);
@@ -1097,18 +1111,29 @@ def _run_snake_bot_impl(max_runs=3, headless=False):
                                     foodWeight *= 0.5;
                                 }
 
-                                var finalX = foodFx * foodWeight + clusterFx * clusterWeight + avoidFx * 5.0 + wallFx * 7.5;
-                                var finalY = foodFy * foodWeight + clusterFy * clusterWeight + avoidFy * 5.0 + wallFy * 7.5;
+                                // М'яке відхилення від ядра (coreFx) контролюється прапорцем експерименту (I1/I2)
+                                var coreFxActive = Boolean(meMass > 1500 && distFromCenter < 450 && (!bestCluster || bestCluster.dist > 300));
+                                var enableCoreFx = Boolean(window.__enableCoreFx);
+                                var coreFx = 0;
+                                var coreFy = 0;
+                                if (enableCoreFx && coreFxActive) {
+                                    var coreForce = ((450 - distFromCenter) / 450) * 4.0;
+                                    coreFx = (hx / (distFromCenter || 1)) * coreForce;
+                                    coreFy = (hy / (distFromCenter || 1)) * coreForce;
+                                }
+
+                                var finalX = foodFx * foodWeight + clusterFx * clusterWeight + avoidFx * 5.0 + wallFx * 7.5 + coreFx;
+                                var finalY = foodFy * foodWeight + clusterFy * clusterWeight + avoidFy * 5.0 + wallFy * 7.5 + coreFy;
                                 var targetAngle = Math.atan2(finalY, finalX);
 
                                 // 6. Умови для безпечного та прибуткового Boost (Turbo Vacuum Wave 3):
                                 // - Кластер з deathDrop >= 21 маси (поріг окупності)
                                 // - Жодного ворога ближче 250px (строгий запобіжник!)
                                 // - Безпечний коридор до кластера (isPathSafe === true)
-                                // - Достатня маса для ривка (minMassForBoost = 100)
+                                // - Достатня маса для ривка (minMassForBoost = 350, Phase 2+)
                                 // - Відстань до кластера > 40px (ще не досягли)
                                 // - Безпечна відстань від краю арени
-                                var minMassForBoost = 100;
+                                var minMassForBoost = window.__minMassForBoost || 350;
                                 var boostCandidate = Boolean(
                                     bestCluster &&
                                     bestCluster.mass >= 21 &&
@@ -1138,6 +1163,8 @@ def _run_snake_bot_impl(max_runs=3, headless=False):
                                     cluster_dist: bestCluster ? bestCluster.dist : 0,
                                     is_path_safe: isPathSafe,
                                     path_safe_blocked: pathSafeBlocked,
+                                    path_safe_steering_blocked: pathSafeSteeringBlocked,
+                                    core_fx_active: coreFxActive,
                                     should_boost: shouldBoost
                                 };
                             })()
@@ -1183,6 +1210,10 @@ def _run_snake_bot_impl(max_runs=3, headless=False):
 
                             if path_safe_blocked and (now >= boost_cooldown_until):
                                 path_safe_blocked_count += 1
+                            if decision.get("path_safe_steering_blocked"):
+                                path_safe_steering_blocked_count += 1
+                            if decision.get("core_fx_active"):
+                                core_fx_activations += 1
 
                             if cluster_mass > max_cluster_seen:
                                 max_cluster_seen = cluster_mass
@@ -1197,8 +1228,8 @@ def _run_snake_bot_impl(max_runs=3, headless=False):
                                     stop_reason = f"наближення ворога ({min_enemy_dist:.0f}px < 200px)"
                                 elif dist_center > safe_radius:
                                     stop_reason = "наближення до стіни арени"
-                                elif me_mass < 100:
-                                    stop_reason = f"захист мінімальної маси ({me_mass:.0f} < 100)"
+                                elif me_mass < min_mass_for_boost:
+                                    stop_reason = f"захист мінімальної маси ({me_mass:.0f} < {min_mass_for_boost})"
                                 elif not should_boost:
                                     stop_reason = "кластер зібрано / ціль зникла"
 
@@ -1266,7 +1297,7 @@ def _run_snake_bot_impl(max_runs=3, headless=False):
                     if ticks % 25 == 0:
                         alive_time = int(time.time() - start_time)
                         boost_tag = " [BOOST]" if boost_active else ""
-                        print(f"[BOT] Арена: {alive_time}с/{max_duration}с | Монети: {score_earned} | З'їдено: {kills_earned} | Маса: {me_mass:.0f}{boost_tag} | Фаза {phase_val} (avoidR {avoid_r_val:.0f}) | Boosts: {boost_triggers_count}")
+                        print(f"[BOT] Арена: {alive_time}с/{max_duration}с | Монети: {score_earned} | З'їдено: {kills_earned} | Маса: {me_mass:.0f}{boost_tag} | Фаза {phase_val} (avoidR {avoid_r_val:.0f}) | Boosts: {boost_triggers_count} (block B:{path_safe_blocked_count}/S:{path_safe_steering_blocked_count})")
 
                     time.sleep(0.12)
 
@@ -1289,7 +1320,7 @@ def _run_snake_bot_impl(max_runs=3, headless=False):
 
                 duration_sec = int(time.time() - start_time)
                 print(f"[BOT] Забіг #{run_idx} тривав {duration_sec} сек.")
-                print(f"      Очки: +{score_earned} | З'їдено змій: {kills_earned} | Активацій boost: {boost_triggers_count} | isPathSafe блоковано: {path_safe_blocked_count} | Макс. кластер: {max_cluster_seen:.0f}")
+                print(f"      Очки: +{score_earned} | З'їдено змій: {kills_earned} | Активацій boost: {boost_triggers_count} | isPathSafe блоковано (boost/steering): {path_safe_blocked_count}/{path_safe_steering_blocked_count} | coreFx активностей: {core_fx_activations} | Макс. кластер: {max_cluster_seen:.0f}")
 
                 # 8. Пауза 6 секунд, щоб екран смерті #cs-dead та сервер повністю синхронізувалися
                 print("[BOT] Очікуємо синхронізацію результату із сервером (6 сек)...")
