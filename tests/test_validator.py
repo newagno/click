@@ -32,3 +32,16 @@ class TestValidator:
         }):
             with pytest.raises(ValueError, match="Invalid RESIDENTIAL_PROXY format"):
                 validate_config()
+
+    def test_format_proxy_colon_password(self):
+        from src.snake.bot import format_proxy
+        # host:port:user:pass where password has colons
+        proxy_raw = "1.2.3.4:8000:myuser:secret:pass:key"
+        formatted = format_proxy(proxy_raw)
+        assert formatted == "myuser:secret:pass:key@1.2.3.4:8000"
+
+    def test_format_proxy_standard_user_pass(self):
+        from src.snake.bot import format_proxy
+        proxy_raw = "http://myuser:secret@1.2.3.4:8000/"
+        formatted = format_proxy(proxy_raw)
+        assert formatted == "myuser:secret@1.2.3.4:8000"

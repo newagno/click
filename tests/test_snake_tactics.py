@@ -16,12 +16,13 @@ def calculate_decay_rate(mass: float) -> float:
     return 0.0
 
 
-def should_boost(cluster_mass: float, min_enemy_dist: float, me_mass: float, cluster_dist: float, dist_from_center: float, safe_radius: float) -> bool:
+def should_boost(cluster_mass: float, min_enemy_dist: float, me_mass: float, cluster_dist: float, dist_from_center: float, safe_radius: float, is_path_safe: bool = True) -> bool:
     """Evaluates whether to trigger Turbo Boost impulse."""
-    min_mass_for_boost = max(100.0, me_mass * 0.5)
+    min_mass_for_boost = 100.0
     return (
         cluster_mass >= 21.0 and
         min_enemy_dist > 250.0 and
+        is_path_safe and
         me_mass >= min_mass_for_boost and
         cluster_dist > 40.0 and
         dist_from_center < (safe_radius - 100.0)
@@ -92,4 +93,15 @@ def test_boost_safety_guards():
         cluster_dist=120.0,
         dist_from_center=1550.0,
         safe_radius=1600.0
+    ) is False
+
+    # Blocked by unsafe path (enemy in cone between head and cluster)
+    assert should_boost(
+        cluster_mass=35.0,
+        min_enemy_dist=300.0,
+        me_mass=300.0,
+        cluster_dist=120.0,
+        dist_from_center=500.0,
+        safe_radius=1600.0,
+        is_path_safe=False
     ) is False

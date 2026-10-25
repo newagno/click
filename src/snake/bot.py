@@ -46,11 +46,13 @@ def format_proxy(proxy_str: str) -> str | None:
             s = s[len(prefix):]
     # Strip trailing slashes or path parameters (e.g. host:port/ or user:pass@host:port/)
     s = s.split("/")[0].strip()
-    # Handle host:port:user:pass format from providers
-    if "@" not in s and s.count(":") == 3:
-        parts = s.split(":")
-        clean_port = "".join(c for c in parts[1] if c.isdigit())
-        return f"{parts[2]}:{parts[3]}@{parts[0]}:{clean_port}"
+    # Handle host:port:user:pass format from providers (where pass may contain colons)
+    if "@" not in s and s.count(":") >= 3:
+        parts = s.split(":", 2)
+        if len(parts) == 3 and parts[1].isdigit() and ":" in parts[2]:
+            host, port, auth = parts
+            user, _, pwd = auth.partition(":")
+            return f"{user}:{pwd}@{host}:{port}"
     if "@" in s and ":" in s:
         auth, _, host_port = s.rpartition("@")
         if ":" in host_port:
@@ -373,15 +375,36 @@ def calculate_avoid_radius(mass: float) -> float:
     return max(220.0, min(400.0, 180.0 + mass * 0.08))
 
 
-def get_phase_weights(mass: float) -> dict:
-    """3-phase weight distribution for food, clusters, and decay compensation."""
-    if mass < 400:
-        return {"phase": 1, "food": 1.0, "cluster": 2.0}
-    elif mass <= 1500:
+def get_phase_weights(mass: float, current_phase: int = 1) -> dict:
+    """3-phase weight distribution with hysteresis for food, clusters, and decay compensation."""
+    phase = current_phase
+    if mass < 350:
+        phase = 1
+    elif phase == 3 and mass < 1400:
+        phase = 2
+    elif phase != 3 and mass >= 1600:
+        phase = 3
+    elif phase == 1 and mass >= 400:
+        phase = 2
+
+    if phase == 3:
+        return {"phase": 3, "food": 1.5, "cluster": 3.0}
+    elif phase == 2:
         return {"phase": 2, "food": 1.0, "cluster": 2.5}
     else:
-        # Phase 3: decay is 11-26 mass/sec -> must eat more aggressively!
-        return {"phase": 3, "food": 1.5, "cluster": 3.0}
+        return {"phase": 1, "food": 1.0, "cluster": 2.0}
+
+
+def check_path_safe_angle(hx: float, hy: float, cx: float, cy: float, ex: float, ey: float) -> bool:
+    """Check if enemy at (ex, ey) blocks path from head (hx, hy) to cluster (cx, cy) within +/-30 deg."""
+    cluster_dist = math.hypot(cx - hx, cy - hy)
+    enemy_dist = math.hypot(ex - hx, ey - hy)
+    if enemy_dist > cluster_dist:
+        return True
+    path_angle = math.atan2(cy - hy, cx - hx)
+    enemy_angle = math.atan2(ey - hy, ex - hx)
+    angle_diff = abs(((enemy_angle - path_angle + math.pi) % (2 * math.pi)) - math.pi)
+    return angle_diff >= (math.pi / 6)
 
 
 def wait_for_bypass(sb, target_url="https://incrypted.com/cryptosnake/", timeout=50) -> bool:
@@ -843,6 +866,7 @@ def _run_snake_bot_impl(max_runs=3, headless=False):
                 boost_start_mass = 0.0
                 boost_cooldown_until = 0.0
                 boost_triggers_count = 0
+                path_safe_blocked_count = 0
                 max_cluster_seen = 0.0
 
                 # Забіг триває доти, доки змійка жива (або вичерпано час сесії)
@@ -922,7 +946,7 @@ def _run_snake_bot_impl(max_runs=3, headless=False):
                                             foodFy += (dy / dist) * force;
                                         }
 
-                                        // Дроп після загибелі змій (f.natural === false) для кластеризації (радіус 320px)
+                                        // Дроп після загибелі змій (f.natural === false) для кластеризації (безпечний радіус 320px)
                                         // Використовуємо поле f.v (маса монети в рушії cryptosnake)
                                         if (f.natural === false && dist <= 320) {
                                             drops.push({ x: f.x, y: f.y, v: (f.v || 1), dist: dist });
@@ -976,7 +1000,30 @@ def _run_snake_bot_impl(max_runs=3, headless=False):
                                     }
                                 }
 
-                                if (bestCluster && bestCluster.dist > 1) {
+                                // Перевірка безпеки коридору до кластера (isPathSafe: відсутність ворогів у конусі ±30°)
+                                var isPathSafe = true;
+                                if (bestCluster) {
+                                    var pathAngle = Math.atan2(bestCluster.y - hy, bestCluster.x - hx);
+                                    for (var other of w.snakes.values()) {
+                                        if (other.id === me.id || other.guild === 'near') continue;
+                                        if (!other.pts || other.pts.length < 2) continue;
+                                        for (var p = 0; p < other.pts.length; p += 4) {
+                                            var ox = other.pts[p], oy = other.pts[p + 1];
+                                            var enemyDist = Math.hypot(ox - hx, oy - hy);
+                                            if (enemyDist > bestCluster.dist) continue;
+                                            var enemyAngle = Math.atan2(oy - hy, ox - hx);
+                                            var angleDiff = Math.abs(((enemyAngle - pathAngle + Math.PI) % (2 * Math.PI)) - Math.PI);
+                                            if (angleDiff < Math.PI / 6) { // ±30° cone
+                                                isPathSafe = false;
+                                                break;
+                                            }
+                                        }
+                                        if (!isPathSafe) break;
+                                    }
+                                }
+
+                                // Притягання до кластера діє ТІЛЬКИ коли шлях безпечний!
+                                if (bestCluster && bestCluster.dist > 1 && isPathSafe) {
                                     var cDist = bestCluster.dist;
                                     var cForce = (bestCluster.mass / (cDist * cDist)) * 1.0;
                                     clusterFx = ((bestCluster.x - hx) / cDist) * cForce;
@@ -1023,16 +1070,20 @@ def _run_snake_bot_impl(max_runs=3, headless=False):
                                     wallFy = -(hy / distFromCenter) * wallForce;
                                 }
 
-                                // 5. 3-фазний розподіл ваг та захист від розпаду (Decay Compensation)
-                                var phase = 1;
+                                // 5. 3-фазний розподіл ваг та захист від розпаду (Decay Compensation з hysteresis)
+                                var phase = (window.__phase || 1);
+                                if (meMass < 350) phase = 1;
+                                else if (phase === 3 && meMass < 1400) phase = 2;
+                                else if (phase !== 3 && meMass >= 1600) phase = 3;
+                                else if (phase === 1 && meMass >= 400) phase = 2;
+                                window.__phase = phase;
+
                                 var foodWeight = 1.0;
                                 var clusterWeight = 2.0;
-                                if (meMass > 1500) {
-                                    phase = 3;
+                                if (phase === 3) {
                                     foodWeight = 1.5;   // decay 11-26 mass/s -> компенсація активним живленням
                                     clusterWeight = 3.0;
-                                } else if (meMass >= 400) {
-                                    phase = 2;
+                                } else if (phase === 2) {
                                     foodWeight = 1.0;
                                     clusterWeight = 2.5;
                                 }
@@ -1054,14 +1105,15 @@ def _run_snake_bot_impl(max_runs=3, headless=False):
                                 var finalY = foodFy * foodWeight + clusterFy * clusterWeight + avoidFy * 5.0 + wallFy * 7.5 + coreFy;
                                 var targetAngle = Math.atan2(finalY, finalX);
 
-                                // 6. Умови для безпечного та прибуткового Boost (Turbo Vacuum):
-                                // - Кластер з deathDrop >= 21 маси
+                                // 6. Умови для безпечного та прибуткового Boost (Turbo Vacuum Wave 3):
+                                // - Кластер з deathDrop >= 21 маси (поріг окупності)
                                 // - Жодного ворога ближче 250px (строгий запобіжник!)
-                                // - Достатня маса для ривка (minMassForBoost = max(100, mass * 0.5))
+                                // - Безпечний коридор до кластера (isPathSafe === true)
+                                // - Достатня маса для ривка (minMassForBoost = 100)
                                 // - Відстань до кластера > 40px (ще не досягли)
                                 // - Безпечна відстань від краю арени
-                                var minMassForBoost = Math.max(100, meMass * 0.5);
-                                var shouldBoost = Boolean(
+                                var minMassForBoost = 100;
+                                var boostCandidate = Boolean(
                                     bestCluster &&
                                     bestCluster.mass >= 21 &&
                                     minEnemyDist > 250 &&
@@ -1069,6 +1121,8 @@ def _run_snake_bot_impl(max_runs=3, headless=False):
                                     bestCluster.dist > 40 &&
                                     distFromCenter < (safeRadius - 100)
                                 );
+                                var shouldBoost = boostCandidate && isPathSafe;
+                                var pathSafeBlocked = boostCandidate && !isPathSafe;
 
                                 return {
                                     is_dead: isDead,
@@ -1086,6 +1140,8 @@ def _run_snake_bot_impl(max_runs=3, headless=False):
                                     safe_radius: safeRadius,
                                     cluster_mass: bestCluster ? bestCluster.mass : 0,
                                     cluster_dist: bestCluster ? bestCluster.dist : 0,
+                                    is_path_safe: isPathSafe,
+                                    path_safe_blocked: pathSafeBlocked,
                                     should_boost: shouldBoost
                                 };
                             })()
@@ -1125,7 +1181,12 @@ def _run_snake_bot_impl(max_runs=3, headless=False):
                             cluster_mass = float(decision.get("cluster_mass") or 0)
                             cluster_dist = float(decision.get("cluster_dist") or 0)
                             should_boost = bool(decision.get("should_boost"))
+                            is_path_safe = bool(decision.get("is_path_safe", True))
+                            path_safe_blocked = bool(decision.get("path_safe_blocked", False))
                             now = time.time()
+
+                            if path_safe_blocked and (now >= boost_cooldown_until):
+                                path_safe_blocked_count += 1
 
                             if cluster_mass > max_cluster_seen:
                                 max_cluster_seen = cluster_mass
@@ -1232,7 +1293,7 @@ def _run_snake_bot_impl(max_runs=3, headless=False):
 
                 duration_sec = int(time.time() - start_time)
                 print(f"[BOT] Забіг #{run_idx} тривав {duration_sec} сек.")
-                print(f"      Очки: +{score_earned} | З'їдено змій: {kills_earned} | Активацій boost: {boost_triggers_count} | Макс. кластер: {max_cluster_seen:.0f}")
+                print(f"      Очки: +{score_earned} | З'їдено змій: {kills_earned} | Активацій boost: {boost_triggers_count} | isPathSafe блоковано: {path_safe_blocked_count} | Макс. кластер: {max_cluster_seen:.0f}")
 
                 # 8. Пауза 6 секунд, щоб екран смерті #cs-dead та сервер повністю синхронізувалися
                 print("[BOT] Очікуємо синхронізацію результату із сервером (6 сек)...")
