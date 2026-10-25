@@ -122,36 +122,47 @@ def is_proxy_working(proxy_raw: str, timeout: int = 7) -> bool:
         return False
 
 
+_cdp_mode_logged = False
+
+
 def _is_cdp_mode(sb) -> bool:
     """Helper to detect if SeleniumBase is actively operating in CDP Mode."""
+    global _cdp_mode_logged
+    branch = None
     try:
         driver = getattr(sb, "driver", None)
         if driver is not None:
             # 1. Driver-level private method check if available
-            if hasattr(driver, "_BaseCase__is_cdp_swap_needed"):
-                if driver._BaseCase__is_cdp_swap_needed():
-                    return True
+            if hasattr(driver, "_BaseCase__is_cdp_swap_needed") and driver._BaseCase__is_cdp_swap_needed():
+                branch = "driver._BaseCase__is_cdp_swap_needed"
             # 2. SeleniumBase shared_utils check
-            try:
-                from seleniumbase.fixtures import shared_utils
-                if shared_utils.is_cdp_swap_needed(driver):
-                    return True
-            except Exception:
-                pass
+            elif not branch:
+                try:
+                    from seleniumbase.fixtures import shared_utils
+                    if shared_utils.is_cdp_swap_needed(driver):
+                        branch = "shared_utils.is_cdp_swap_needed"
+                except Exception:
+                    pass
             # 3. Direct driver cdp mode active check
-            if hasattr(driver, "is_cdp_mode_active") and driver.is_cdp_mode_active():
+            if not branch and hasattr(driver, "is_cdp_mode_active") and driver.is_cdp_mode_active():
                 if hasattr(driver, "is_connected") and not driver.is_connected():
-                    return True
+                    branch = "driver.is_cdp_mode_active && !is_connected"
             # 4. Fallback via driver type name
-            driver_type = type(driver).__name__.lower()
-            if "cdp" in driver_type or "undetected" in driver_type:
-                if hasattr(driver, "is_connected") and not driver.is_connected():
-                    return True
+            if not branch:
+                driver_type = type(driver).__name__.lower()
+                if ("cdp" in driver_type or "undetected" in driver_type) and hasattr(driver, "is_connected") and not driver.is_connected():
+                    branch = f"driver_type ({type(driver).__name__}) && !is_connected"
         # 5. sb-level check
-        if hasattr(sb, "_BaseCase__is_cdp_swap_needed") and sb._BaseCase__is_cdp_swap_needed():
-            return True
+        if not branch and hasattr(sb, "_BaseCase__is_cdp_swap_needed") and sb._BaseCase__is_cdp_swap_needed():
+            branch = "sb._BaseCase__is_cdp_swap_needed"
     except Exception:
         pass
+
+    if branch:
+        if not _cdp_mode_logged:
+            print(f"[CDP] Режим детекції активний через: {branch}")
+            _cdp_mode_logged = True
+        return True
     return False
 
 
@@ -169,6 +180,10 @@ def safe_eval(sb, code: str):
     clean_r = clean.rstrip().rstrip(";")
     if clean_r.startswith("return (") and (clean_r.endswith(")()") or clean_r.endswith("})()")):
         inner_iife = clean_r[len("return "):].strip()
+    elif clean_r.startswith("return (") and clean_r.endswith(")") and not (clean_r.endswith(")()") or clean_r.endswith("})()")):
+        expr = clean_r[len("return "):].strip()
+        script_to_run = expr if is_cdp else f"return {expr};"
+        return sb.execute_script(script_to_run)
     elif clean_r.startswith("(()") or clean_r.startswith("(function"):
         inner_iife = clean_r
     else:
@@ -1055,6 +1070,10 @@ def _run_snake_bot_impl(max_runs=3, headless=False):
                             elif should_boost and (now >= boost_cooldown_until):
                                 if DRY_RUN:
                                     print(f"[DRY_RUN BOOST] 🚀 АКТИВАЦІЯ (імітація)! Кластер: {cluster_mass:.1f} маси на {cluster_dist:.0f}px, Ворог: {min_enemy_dist:.0f}px, Маса: {me_mass:.0f}")
+                                    boost_active = True
+                                    boost_start_time = now
+                                    boost_start_mass = me_mass
+                                    boost_triggers_count += 1
                                 else:
                                     try:
                                         safe_eval(sb, "var c = document.querySelector('#cs-canvas'); if (c) { if (!c.hasAttribute('tabindex')) c.setAttribute('tabindex', '-1'); c.focus(); }")
@@ -1070,11 +1089,11 @@ def _run_snake_bot_impl(max_runs=3, headless=False):
                                         print(f"[BOT] 🚀 BOOST! Кластер {cluster_mass:.0f} маси (ворог {min_enemy_dist:.0f}px, маса {me_mass:.0f})")
                                     except Exception as e_cdp:
                                         print(f"[BOT] Помилка keyDown Space: {e_cdp}")
-
-                                boost_active = True
-                                boost_start_time = now
-                                boost_start_mass = me_mass
-                                boost_triggers_count += 1
+                                    else:
+                                        boost_active = True
+                                        boost_start_time = now
+                                        boost_start_mass = me_mass
+                                        boost_triggers_count += 1
 
                     except Exception as ex:
                         print(f"[BOT] Помилка циклу: {ex}")

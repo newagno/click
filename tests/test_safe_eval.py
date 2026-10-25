@@ -115,3 +115,19 @@ def test_safe_eval_side_effect_without_return():
     res = safe_eval(sb, cmd)
     assert res == "EVAL_OK"
     assert sb.last_script == cmd
+
+
+def test_safe_eval_parenthesized_expression_cdp():
+    sb = FakeSB(is_cdp=True)
+    code = "return (document.querySelector('#cs-season-status')?.innerText || '');"
+    res = safe_eval(sb, code)
+    assert res == "EVAL_OK"
+    assert sb.last_script == "(document.querySelector('#cs-season-status')?.innerText || '')"
+
+
+def test_safe_eval_parenthesized_expression_webdriver():
+    sb = FakeSB(is_cdp=False)
+    code = "return (document.querySelector('#cs-season-status')?.innerText || '');"
+    res = safe_eval(sb, code)
+    assert res == "EVAL_OK"
+    assert sb.last_script == "return (document.querySelector('#cs-season-status')?.innerText || '');"
