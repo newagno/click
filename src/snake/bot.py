@@ -6,6 +6,7 @@ import math
 import zipfile
 import tempfile
 from pathlib import Path
+# pyrefly: ignore[missing-import]
 from dotenv import load_dotenv
 from seleniumbase import SB
 
@@ -102,7 +103,7 @@ def parse_cookies_from_env(raw: str) -> list | None:
 
 
 def inject_cookie_safely(driver, c: dict) -> bool:
-    """Safely inject a single cookie, repairing expired timestamps and domain mismatches."""
+    """Safely inject a single cookie via CDP Network.setCookie and standard driver."""
     name = c.get("name")
     val = c.get("value")
     if not name or val is None:
@@ -115,14 +116,13 @@ def inject_cookie_safely(driver, c: dict) -> bool:
 
     now = time.time()
     clean = {
-        "name": name,
-        "value": val,
+        "name": str(name),
+        "value": str(val),
         "path": c.get("path", "/"),
     }
-    if "secure" in c and isinstance(c["secure"], bool):
-        clean["secure"] = c["secure"]
-    if "httpOnly" in c and isinstance(c["httpOnly"], bool):
-        clean["httpOnly"] = c["httpOnly"]
+    raw_domain = c.get("domain", "")
+    domain = raw_domain if raw_domain else ".incrypted.com"
+    clean["domain"] = domain
 
     exp = c.get("expiry")
     if exp is not None:
@@ -135,21 +135,36 @@ def inject_cookie_safely(driver, c: dict) -> bool:
         except (ValueError, TypeError):
             pass
 
-    domain = c.get("domain", "")
-    if domain:
+    # 1. Native CDP injection (immune to "invalid cookie domain")
+    try:
+        cdp_cookie = {
+            "name": clean["name"],
+            "value": clean["value"],
+            "domain": clean["domain"],
+            "path": clean["path"],
+            "secure": bool(c.get("secure", True)),
+            "httpOnly": bool(c.get("httpOnly", False))
+        }
+        if "expiry" in clean:
+            cdp_cookie["expires"] = clean["expiry"]
+        driver.execute_cdp_cmd("Network.setCookie", cdp_cookie)
+        return True
+    except Exception:
+        pass
+
+    # 2. Fallback to standard WebDriver add_cookie
+    try:
+        driver.add_cookie(clean)
+        return True
+    except Exception:
+        pass
+    if domain.startswith("."):
         try:
-            clean["domain"] = domain
+            clean["domain"] = domain.lstrip(".")
             driver.add_cookie(clean)
             return True
         except Exception:
             pass
-        if domain.startswith("."):
-            try:
-                clean["domain"] = domain.lstrip(".")
-                driver.add_cookie(clean)
-                return True
-            except Exception:
-                pass
 
     try:
         clean_no_domain = {k: v for k, v in clean.items() if k != "domain"}
@@ -163,34 +178,35 @@ def inject_cookie_safely(driver, c: dict) -> bool:
 
 
 def wait_for_bypass(sb, target_url="https://incrypted.com/cryptosnake/", timeout=50) -> bool:
-    """Click the Turnstile checkbox until it clears.
-    In UC mode: do NOT make CDP calls (execute_script, get_text) while Turnstile is active.
-    Only click the captcha and check title afterwards.
+    """Wait for page to finish loading and pass Cloudflare Turnstile if present.
+    In UC mode: do NOT make intrusive CDP calls while Turnstile is active.
     """
     deadline = timeout
-    step = 5
+    step = 4
     waited = 0
     reconnects = 0
     while waited < deadline:
         try:
-            title = sb.get_title().lower()
-            if "just a moment" not in title and "cloudflare" not in title:
-                print(f"[CF] Перевірку Cloudflare пройдено (заголовок: '{sb.get_title()}')!")
+            raw_title = sb.get_title() or ""
+            title = raw_title.lower().strip()
+            # Успіх тільки коли заголовок НЕ порожній і НЕ Cloudflare challenge!
+            if title and "just a moment" not in title and "cloudflare" not in title and "moment..." not in title:
+                print(f"[CF] Перевірку Cloudflare пройдено (заголовок: '{raw_title}')!")
                 return True
         except Exception:
             pass
 
-        print(f"[CF] Очікуємо проходження Turnstile ({waited}s / {deadline}s)...")
+        print(f"[CF] Очікуємо завантаження сторінки / Turnstile ({waited}s / {deadline}s)...")
         try:
             sb.uc_gui_click_captcha()
         except Exception as e:
-            print(f"[CF] Спроба кліку: {e}")
+            pass
 
         sb.sleep(step)
         waited += step
 
-        # Every 15s refresh challenge with UC reconnect
-        if waited % 15 == 0 and reconnects < 3:
+        # Every 16s refresh challenge with UC reconnect
+        if waited % 16 == 0 and reconnects < 3:
             reconnects += 1
             print(f"[CF] Перепідключення #{reconnects} для оновлення виклику...")
             try:
@@ -200,8 +216,9 @@ def wait_for_bypass(sb, target_url="https://incrypted.com/cryptosnake/", timeout
                 print(f"[CF] Помилка uc_open_with_reconnect: {e}")
 
     try:
-        title = sb.get_title().lower()
-        return "just a moment" not in title and "cloudflare" not in title
+        raw_title = sb.get_title() or ""
+        title = raw_title.lower().strip()
+        return bool(title and "just a moment" not in title and "cloudflare" not in title and "moment..." not in title)
     except Exception:
         return False
 
@@ -214,21 +231,21 @@ def ensure_authenticated(sb):
 
     print("[AUTH] Ініціалізація браузера на домені...")
     sb.uc_open_with_reconnect(BASE_URL, reconnect_time=4)
-    sb.sleep(3)
+    sb.sleep(4)
 
-    # Якщо заголовок "Just a moment...", очікуємо і клікаємо Turnstile
+    # Якщо заголовок порожній або "Just a moment...", очікуємо завантаження
     if not wait_for_bypass(sb, target_url=BASE_URL, timeout=40):
         print("[AUTH] ⚠️ Не вдалося пройти перевірку на головній сторінці за 40 сек.")
 
     cur_url = sb.get_current_url()
-    cur_title = sb.get_title()
+    cur_title = sb.get_title() or ""
     print(f"[AUTH] Поточний URL: {cur_url} | Заголовок: '{cur_title}'")
-    if not cur_url or "incrypted.com" not in cur_url:
-        print("[AUTH] Повторна спроба відкрити BASE_URL...")
+    if not cur_title or not cur_url or "incrypted.com" not in cur_url:
+        print("[AUTH] Сторінка не завантажилася повністю, відкриваємо BASE_URL повторно...")
         try:
             sb.open(BASE_URL)
-            sb.sleep(3)
-            print(f"[AUTH] URL після відкриття: {sb.get_current_url()}")
+            sb.sleep(4)
+            print(f"[AUTH] Заголовок після повторного відкриття: '{sb.get_title()}'")
         except Exception as e_open:
             print(f"[AUTH] Помилка відкриття BASE_URL: {e_open}")
 
@@ -253,6 +270,7 @@ def ensure_authenticated(sb):
                 added += 1
         print(f"[AUTH] Успішно інжектовано {added} куків.")
         return True
+
 
     # 3. Якщо куків немає, виконуємо вхід за email + password
     if email and password:
