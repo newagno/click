@@ -834,7 +834,8 @@ def _run_snake_bot_impl(max_runs=3, headless=False):
                     max_duration = 180  # 3 хвилини для тестової перевірки DRY_RUN
                     print("[BOT] 🧪 УВІМКНЕНО DRY_RUN (3 хв тест). CDP Space імітується, вимірюємо кластери та запобіжники.")
                 else:
-                    max_duration = 2100 if os.getenv("GITHUB_ACTIONS") else 2400  # 35 хв на CI, до 40 хв локально
+                    default_duration = 2100 if os.getenv("GITHUB_ACTIONS") else 2400
+                    max_duration = int(os.getenv("MAX_DURATION", default_duration))
                     print(f"[BOT] Змійка на полі! Марафон на {max_duration // 60} хв: Turbo Vacuum (Space) + Smart Predator + Dynamic Walls...")
 
                 boost_active = False
