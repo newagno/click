@@ -368,6 +368,22 @@ def is_session_timeout(elapsed: float, is_ci: bool) -> bool:
     return False
 
 
+def calculate_avoid_radius(mass: float) -> float:
+    """Dynamic avoidance radius scaled to snake turning physics (capped at 400px)."""
+    return max(220.0, min(400.0, 180.0 + mass * 0.08))
+
+
+def get_phase_weights(mass: float) -> dict:
+    """3-phase weight distribution for food, clusters, and decay compensation."""
+    if mass < 400:
+        return {"phase": 1, "food": 1.0, "cluster": 2.0}
+    elif mass <= 1500:
+        return {"phase": 2, "food": 1.0, "cluster": 2.5}
+    else:
+        # Phase 3: decay is 11-26 mass/sec -> must eat more aggressively!
+        return {"phase": 3, "food": 1.5, "cluster": 3.0}
+
+
 def wait_for_bypass(sb, target_url="https://incrypted.com/cryptosnake/", timeout=50) -> bool:
     """Wait for page to finish loading and pass Cloudflare Turnstile if present.
     In UC mode: do NOT make intrusive CDP calls while Turnstile is active.
@@ -966,7 +982,8 @@ def _run_snake_bot_impl(max_runs=3, headless=False):
                                     clusterFy = ((bestCluster.y - hy) / cDist) * cForce;
                                 }
 
-                                // 3. Ухилення від ворожих змій з підвищеною зоною безпеки
+                                // 3. Ухилення від ворожих змій з динамічною зоною безпеки за масою (220-400px)
+                                var avoidRadius = Math.max(220, Math.min(400, 180 + meMass * 0.08));
                                 var avoidFx = 0;
                                 var avoidFy = 0;
                                 var minEnemyDist = 9999;
@@ -981,8 +998,8 @@ def _run_snake_bot_impl(max_runs=3, headless=False):
                                         var odist = Math.hypot(hx - ox, hy - oy);
                                         if (odist < minEnemyDist) minEnemyDist = odist;
 
-                                        // Збільшена зона безпеки (220px) та підвищена небезпека від голови ворога
-                                        if (odist < 220 && odist > 1) {
+                                        // Динамічна зона безпеки avoidRadius та підвищена небезпека від голови ворога
+                                        if (odist < avoidRadius && odist > 1) {
                                             var headMultiplier = (p === 0) ? 2.5 : 1.0;
                                             var repForce = (90.0 * headMultiplier) / (odist * odist);
                                             avoidFx += ((hx - ox) / odist) * repForce;
@@ -1005,13 +1022,35 @@ def _run_snake_bot_impl(max_runs=3, headless=False):
                                     wallFy = -(hy / distFromCenter) * wallForce;
                                 }
 
-                                // 5. Decay-aware баланс жадібності до їжі:
-                                // Якщо маса > 400 (активний розпад (mass - 400)*0.01/сек), потрібне стабільне підживлення
-                                var decayActive = meMass > 400;
-                                var foodWeight = decayActive ? Math.max(0.5, (minEnemyDist < 180 ? 0.3 : 1.0)) : (minEnemyDist < 180 ? 0.2 : 1.0);
+                                // 5. 3-фазний розподіл ваг та захист від розпаду (Decay Compensation)
+                                var phase = 1;
+                                var foodWeight = 1.0;
+                                var clusterWeight = 2.0;
+                                if (meMass > 1500) {
+                                    phase = 3;
+                                    foodWeight = 1.5;   // decay 11-26 mass/s -> компенсація активним живленням
+                                    clusterWeight = 3.0;
+                                } else if (meMass >= 400) {
+                                    phase = 2;
+                                    foodWeight = 1.0;
+                                    clusterWeight = 2.5;
+                                }
 
-                                var finalX = foodFx * foodWeight + clusterFx * 2.0 + avoidFx * 5.0 + wallFx * 7.5;
-                                var finalY = foodFy * foodWeight + clusterFy * 2.0 + avoidFy * 5.0 + wallFy * 7.5;
+                                if (minEnemyDist < 180) {
+                                    foodWeight *= 0.5;
+                                }
+
+                                // М'яке відхилення від хаотичного ядра (< 450px) для великої змійки, якщо в ядрі немає великого кластера
+                                var coreFx = 0;
+                                var coreFy = 0;
+                                if (meMass > 1500 && distFromCenter < 450 && (!bestCluster || bestCluster.dist > 300)) {
+                                    var coreForce = ((450 - distFromCenter) / 450) * 4.0;
+                                    coreFx = (hx / (distFromCenter || 1)) * coreForce;
+                                    coreFy = (hy / (distFromCenter || 1)) * coreForce;
+                                }
+
+                                var finalX = foodFx * foodWeight + clusterFx * clusterWeight + avoidFx * 5.0 + wallFx * 7.5 + coreFx;
+                                var finalY = foodFy * foodWeight + clusterFy * clusterWeight + avoidFy * 5.0 + wallFy * 7.5 + coreFy;
                                 var targetAngle = Math.atan2(finalY, finalX);
 
                                 // 6. Умови для безпечного та прибуткового Boost (Turbo Vacuum):
@@ -1037,6 +1076,10 @@ def _run_snake_bot_impl(max_runs=3, headless=False):
                                     kills: currentKills,
                                     angle: targetAngle,
                                     mass: meMass,
+                                    phase: phase,
+                                    avoid_radius: avoidRadius,
+                                    food_weight: foodWeight,
+                                    cluster_weight: clusterWeight,
                                     enemy_dist: minEnemyDist,
                                     dist_center: distFromCenter,
                                     safe_radius: safeRadius,
@@ -1154,10 +1197,18 @@ def _run_snake_bot_impl(max_runs=3, headless=False):
                         break
 
                     ticks += 1
+                    phase_val = decision.get("phase", 1) if decision else 1
+                    avoid_r_val = decision.get("avoid_radius", 220.0) if decision else 220.0
+                    food_w_val = decision.get("food_weight", 1.0) if decision else 1.0
+                    cluster_w_val = decision.get("cluster_weight", 2.0) if decision else 2.0
+
+                    if DRY_RUN and (ticks % 10 == 0):
+                        print(f"[DRY] mass={me_mass:.0f} phase={phase_val} avoidR={avoid_r_val:.0f} foodW={food_w_val:.1f} clusterW={cluster_w_val:.1f}")
+
                     if ticks % 25 == 0:
                         alive_time = int(time.time() - start_time)
                         boost_tag = " [BOOST]" if boost_active else ""
-                        print(f"[BOT] Арена: {alive_time}с/{max_duration}с | Монети: {score_earned} | З'їдено: {kills_earned} | Маса: {me_mass:.0f}{boost_tag} | Boosts: {boost_triggers_count}")
+                        print(f"[BOT] Арена: {alive_time}с/{max_duration}с | Монети: {score_earned} | З'їдено: {kills_earned} | Маса: {me_mass:.0f}{boost_tag} | Фаза {phase_val} (avoidR {avoid_r_val:.0f}) | Boosts: {boost_triggers_count}")
 
                     time.sleep(0.12)
 
