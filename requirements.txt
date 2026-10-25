@@ -2,3 +2,6 @@ seleniumbase==4.52.4
 requests
 python-dotenv
 pytest
+tzdata
+pyautogui
+

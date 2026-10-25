@@ -152,7 +152,7 @@ def wait_for_bypass(sb, timeout=60):
         # Only now one cheap check: did the title clear?
         try:
             title = sb.get_title().lower()
-            if "just a moment" not in title and "cloudflare" not in title:
+            if "just a moment" not in title and "cloudflare" not in title and "трохи зачекайте" not in title and "зачекайте" not in title:
                 print(f"DEBUG: Challenge cleared after ~{waited + step}s.")
                 return True
         except Exception:
@@ -304,7 +304,8 @@ class IncryptedBrowser:
                 body_lower = (self.sb.get_text("body") or "").lower()
             except Exception:
                 pass
-            if "cloudflare" in self.sb.get_title().lower() or "just a moment" in self.sb.get_title().lower() or "_cf_chl_opt" in body_lower or "performing security verification" in body_lower:
+            title_lower = (self.sb.get_title() or "").lower()
+            if "cloudflare" in title_lower or "just a moment" in title_lower or "трохи зачекайте" in title_lower or "зачекайте" in title_lower or "_cf_chl_opt" in body_lower or "performing security verification" in body_lower:
                 return "error|Cloudflare challenge not solved after initial load; uc_gui_click_captcha ineffective or blocked"
             log_page_state(self.sb, "TIMEOUT - neither login form nor dashboard appeared")
             return "error|Page did not load expected content after 80s"
