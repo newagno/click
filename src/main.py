@@ -43,6 +43,30 @@ def save_debug_artifacts(sb, error_msg):
     except Exception as e:
         print(f"Failed to save debug artifacts: {e}")
 
+def is_proxy_alive(proxy_str: str, timeout: int = 7) -> bool:
+    """Check if proxy is alive and can connect to Cloudflare CDN."""
+    if not proxy_str:
+        return False
+    import requests
+    proxy_dict = parse_proxy(proxy_str)
+    if not proxy_dict:
+        return False
+    user, pwd = proxy_dict["user"], proxy_dict["password"]
+    host, port = proxy_dict["host"], proxy_dict["port"]
+    proxy_url = f"http://{user}:{pwd}@{host}:{port}"
+    try:
+        r = requests.get(
+            "https://cloudflare.com/cdn-cgi/trace",
+            proxies={"http": proxy_url, "https": proxy_url},
+            timeout=timeout,
+            headers={"User-Agent": "Mozilla/5.0"}
+        )
+        return r.status_code in (200, 301, 302, 403)
+    except Exception as e:
+        print(f"DEBUG: Proxy probe failed for {host}:{port}: {e}")
+        return False
+
+
 def main():
     parser = argparse.ArgumentParser(description="Incrypted Daily Claim Bot")
     parser.add_argument("--mode", type=str, default="claim", choices=["check", "claim", "update"], 
@@ -91,10 +115,35 @@ def main():
     if args.mode == "claim":
         email = os.getenv("INCRYPTED_EMAIL")
         password = os.getenv("INCRYPTED_PASSWORD")
-        proxy_raw = os.getenv("RESIDENTIAL_PROXY", "")
+
+        # Підтримка основного та резервного проксі (автоматичний failover)
+        primary_proxy = os.getenv("RESIDENTIAL_PROXY") or os.getenv("PROXY") or ""
+        backup_proxy = os.getenv("BACKUP_PROXY") or os.getenv("SECONDARY_PROXY") or ""
+
+        proxy_raw = ""
+        if primary_proxy:
+            print("DEBUG: Checking primary proxy (RESIDENTIAL_PROXY)...")
+            if is_proxy_alive(primary_proxy):
+                print("DEBUG: Primary proxy is ALIVE and reachable.")
+                proxy_raw = primary_proxy
+            else:
+                print("WARNING: Primary proxy (RESIDENTIAL_PROXY) is unreachable or offline!")
+                if backup_proxy:
+                    print("DEBUG: Checking backup proxy (BACKUP_PROXY)...")
+                    if is_proxy_alive(backup_proxy):
+                        print("SUCCESS: Backup proxy is ALIVE! Switching to BACKUP_PROXY.")
+                        proxy_raw = backup_proxy
+                    else:
+                        print("WARNING: Backup proxy is also unreachable.")
+        elif backup_proxy:
+            print("DEBUG: Checking backup proxy (BACKUP_PROXY)...")
+            if is_proxy_alive(backup_proxy):
+                print("SUCCESS: Backup proxy is ALIVE!")
+                proxy_raw = backup_proxy
 
         # Parse proxy for authenticated connections.
         proxy_parts = parse_proxy(proxy_raw)
+        extension_arg = None
         if proxy_parts:
             import zipfile, tempfile
             host, port = proxy_parts["host"], proxy_parts["port"]
@@ -130,7 +179,7 @@ def main():
         else:
             proxy_arg = None
             extension_arg = None
-            print("DEBUG: No proxy configured — connecting directly.")
+            print("DEBUG: No proxy configured or available — connecting directly.")
 
         headless = False
         binary_location = get_binary_path()

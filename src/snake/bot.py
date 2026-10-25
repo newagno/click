@@ -25,6 +25,7 @@ PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
 COOKIE_FILE = PROJECT_ROOT / "incrypted_cookies.json"
 GAME_URL = "https://incrypted.com/cryptosnake/"
 BASE_URL = "https://incrypted.com"
+DRY_RUN = os.getenv("DRY_RUN", "0").lower() in ("1", "true", "yes")
 
 try:
     from .notifier import send_telegram_message
@@ -372,7 +373,28 @@ def ensure_authenticated(sb):
 def _run_snake_bot_impl(max_runs=3, headless=False):
     binary = get_binary_path()
 
-    proxy_raw = os.getenv("RESIDENTIAL_PROXY", "")
+    primary_proxy = os.getenv("RESIDENTIAL_PROXY") or os.getenv("PROXY") or ""
+    backup_proxy = os.getenv("BACKUP_PROXY") or os.getenv("SECONDARY_PROXY") or ""
+
+    proxy_raw = ""
+    if primary_proxy:
+        print("[BOT] Перевірка доступності основного проксі (RESIDENTIAL_PROXY)...")
+        if is_proxy_working(primary_proxy, timeout=7):
+            proxy_raw = primary_proxy
+        else:
+            print("[BOT] ⚠️ Основний проксі не відповідає!")
+            if backup_proxy:
+                print("[BOT] Перевірка резервного проксі (BACKUP_PROXY)...")
+                if is_proxy_working(backup_proxy, timeout=7):
+                    print("[BOT] ✅ Резервний проксі активний! Перемикаємось на BACKUP_PROXY.")
+                    proxy_raw = backup_proxy
+                else:
+                    print("[BOT] ⚠️ Резервний проксі також не відповідає.")
+    elif backup_proxy:
+        print("[BOT] Перевірка резервного проксі (BACKUP_PROXY)...")
+        if is_proxy_working(backup_proxy, timeout=7):
+            proxy_raw = backup_proxy
+
     proxy_clean = format_proxy(proxy_raw)
 
     sb_kwargs = dict(
@@ -383,18 +405,19 @@ def _run_snake_bot_impl(max_runs=3, headless=False):
 
     proxy_ext_dir = None
     if proxy_clean:
-        print("[BOT] Перевірка доступності проксі-сервера...")
-        if is_proxy_working(proxy_raw, timeout=7):
-            ext_zip = build_proxy_extension(proxy_clean)
-            if ext_zip:
-                proxy_ext_dir = os.path.dirname(ext_zip)
-                sb_kwargs["extension_zip"] = ext_zip
-            else:
-                sb_kwargs["proxy"] = proxy_clean
-            host_display = proxy_clean.split("@")[-1]
-            print(f"[BOT] Проксі перевірено та активовано: {host_display}")
+        ext_zip = build_proxy_extension(proxy_clean)
+        if ext_zip:
+            proxy_ext_dir = os.path.dirname(ext_zip)
+            sb_kwargs["extension_zip"] = ext_zip
         else:
-            print("[BOT] ⚠️ Проксі не відповідає або облікові дані недійсні! Працюємо напряму без проксі.")
+            sb_kwargs["proxy"] = proxy_clean
+        host_display = proxy_clean.split("@")[-1]
+        print(f"[BOT] Проксі активовано: {host_display}")
+    else:
+        if primary_proxy or backup_proxy:
+            print("[BOT] ⚠️ Усі вказані проксі недоступні! Спроба прямого підключення.")
+        else:
+            print("[BOT] Проксі не налаштовано — працюємо напряму.")
 
     print("=" * 60)
     print(f"[BOT] Запуск інтелектуального бота CryptoSnake")
@@ -626,7 +649,16 @@ def _run_snake_bot_impl(max_runs=3, headless=False):
                     send_telegram_message(err_msg)
                     continue
 
-                # 7. Отримуємо розміри Canvas
+                # 7. Підготовка canvas та розмірів
+                sb.execute_script("""
+                    var c = document.querySelector('#cs-canvas');
+                    if (c) {
+                        if (!c.hasAttribute('tabindex')) {
+                            c.setAttribute('tabindex', '-1');
+                        }
+                        c.focus();
+                    }
+                """)
                 canvas_rect = sb.execute_script("""
                     return (() => {
                         var c = document.querySelector('#cs-canvas');
@@ -639,14 +671,26 @@ def _run_snake_bot_impl(max_runs=3, headless=False):
                 cx = int(canvas_rect['x'] + canvas_rect['w'] / 2) if canvas_rect else 600
                 cy = int(canvas_rect['y'] + canvas_rect['h'] / 2) if canvas_rect else 350
 
-                print("[BOT] Змійка на полі! Активуємо AI-радар монет NEAR та автоухилення...")
                 start_time = time.time()
                 score_earned = 0
                 kills_earned = 0
                 ticks = 0
-                max_duration = 600  # До 10 хвилин виживання
 
-                # Забіг триває доти, доки змійка жива (або максимум 10 хвилин)
+                if DRY_RUN:
+                    max_duration = 180  # 3 хвилини для тестової перевірки DRY_RUN
+                    print("[BOT] 🧪 УВІМКНЕНО DRY_RUN (3 хв тест). CDP Space імітується, вимірюємо кластери та запобіжники.")
+                else:
+                    max_duration = 2100 if os.getenv("GITHUB_ACTIONS") else 2400  # 35 хв на CI, до 40 хв локально
+                    print(f"[BOT] Змійка на полі! Марафон на {max_duration // 60} хв: Turbo Vacuum (Space) + Smart Predator + Dynamic Walls...")
+
+                boost_active = False
+                boost_start_time = 0.0
+                boost_start_mass = 0.0
+                boost_cooldown_until = 0.0
+                boost_triggers_count = 0
+                max_cluster_seen = 0.0
+
+                # Забіг триває доти, доки змійка жива (або вичерпано час сесії)
                 while (time.time() - start_time) < max_duration:
                     try:
                         decision = sb.execute_script("""
@@ -668,7 +712,7 @@ def _run_snake_bot_impl(max_runs=3, headless=False):
 
                                 var w = window.__activeWorld;
                                 if (!w || !w.snakes) {
-                                    return { is_dead: isDead, coins: currentCoins, len: currentLen, kills: currentKills, angle: null };
+                                    return { is_dead: isDead, coins: currentCoins, len: currentLen, kills: currentKills, angle: null, should_boost: false };
                                 }
 
                                 // Знаходимо саме змійку гравця
@@ -687,35 +731,100 @@ def _run_snake_bot_impl(max_runs=3, headless=False):
                                 }
 
                                 if (!me || !me.alive || !me.pts || me.pts.length < 2) {
-                                    return { is_dead: true, coins: currentCoins, len: currentLen, kills: currentKills, angle: null };
+                                    return { is_dead: true, coins: currentCoins, len: currentLen, kills: currentKills, angle: null, should_boost: false };
                                 }
 
+                                var meMass = me.mass || 0;
                                 currentCoins = String(Math.floor(me.coins || 0));
-                                currentLen   = String(Math.round(me.mass || 0));
+                                currentLen   = String(Math.round(meMass));
                                 currentKills = String(me.kills || 0);
 
                                 var hx = me.pts[0];
                                 var hy = me.pts[1];
 
-                                // 1. Пошук найближчих монет з пріоритетом NEAR (×3.0)
+                                // 1. Пошук монет та виявлення дропу після загибелі змій (!f.natural)
                                 var foodFx = 0;
                                 var foodFy = 0;
+                                var drops = [];
+
                                 if (w.food && w.food.length > 0) {
                                     for (var f of w.food) {
                                         if (f.dead) continue;
                                         var dx = f.x - hx;
                                         var dy = f.y - hy;
                                         var dist = Math.hypot(dx, dy);
-                                        if (dist > 650 || dist < 1) continue;
+                                        if (dist < 1) continue;
 
-                                        var weight = f.type === 'near' ? 3.0 : 1.0;
-                                        var force = weight / (dist * dist);
-                                        foodFx += (dx / dist) * force;
-                                        foodFy += (dy / dist) * force;
+                                        // Базовий радар їжі (до 650px) з пріоритетом гільдійських монет NEAR (×3.0)
+                                        if (dist <= 650) {
+                                            var weight = f.type === 'near' ? 3.0 : 1.0;
+                                            var force = weight / (dist * dist);
+                                            foodFx += (dx / dist) * force;
+                                            foodFy += (dy / dist) * force;
+                                        }
+
+                                        // Дроп після загибелі змій (f.natural === false) для кластеризації (радіус 320px)
+                                        // Використовуємо поле f.v (маса монети в рушії cryptosnake)
+                                        if (f.natural === false && dist <= 320) {
+                                            drops.push({ x: f.x, y: f.y, v: (f.v || 1), dist: dist });
+                                        }
                                     }
                                 }
 
-                                // 2. Ухилення від ворожих змій з підвищеною зоною безпеки
+                                // 2. Кластеризація дропів за відстанню (радіус суміжності 50px)
+                                var clusterFx = 0;
+                                var clusterFy = 0;
+                                var bestCluster = null;
+
+                                if (drops.length >= 3) {
+                                    var visited = new Uint8Array(drops.length);
+                                    for (var i = 0; i < drops.length; i++) {
+                                        if (visited[i]) continue;
+                                        var cMass = drops[i].v;
+                                        var cCount = 1;
+                                        var sumX = drops[i].x * drops[i].v;
+                                        var sumY = drops[i].y * drops[i].v;
+                                        visited[i] = 1;
+
+                                        for (var j = i + 1; j < drops.length; j++) {
+                                            if (visited[j]) continue;
+                                            var ddx = drops[i].x - drops[j].x;
+                                            var ddy = drops[i].y - drops[j].y;
+                                            if (ddx * ddx + ddy * ddy < 2500) { // відстань < 50px
+                                                visited[j] = 1;
+                                                cMass += drops[j].v;
+                                                cCount += 1;
+                                                sumX += drops[j].x * drops[j].v;
+                                                sumY += drops[j].y * drops[j].v;
+                                            }
+                                        }
+
+                                        // Поріг окупності: cluster.mass >= 21 (в 3 рази більше за boostCost: 7)
+                                        if (cMass >= 21) {
+                                            var cx_drop = sumX / cMass;
+                                            var cy_drop = sumY / cMass;
+                                            var cDist = Math.hypot(cx_drop - hx, cy_drop - hy);
+                                            if (!bestCluster || cMass > bestCluster.mass) {
+                                                bestCluster = {
+                                                    mass: cMass,
+                                                    count: cCount,
+                                                    x: cx_drop,
+                                                    y: cy_drop,
+                                                    dist: cDist
+                                                };
+                                            }
+                                        }
+                                    }
+                                }
+
+                                if (bestCluster && bestCluster.dist > 1) {
+                                    var cDist = bestCluster.dist;
+                                    var cForce = (bestCluster.mass / (cDist * cDist)) * 1.0;
+                                    clusterFx = ((bestCluster.x - hx) / cDist) * cForce;
+                                    clusterFy = ((bestCluster.y - hy) / cDist) * cForce;
+                                }
+
+                                // 3. Ухилення від ворожих змій з підвищеною зоною безпеки
                                 var avoidFx = 0;
                                 var avoidFy = 0;
                                 var minEnemyDist = 9999;
@@ -740,30 +849,58 @@ def _run_snake_bot_impl(max_runs=3, headless=False):
                                     }
                                 }
 
-                                // 3. Відштовхування від меж арени
+                                // 4. Відштовхування від меж арени (динамічний safeRadius від 380px до 600px)
                                 var wallFx = 0;
                                 var wallFy = 0;
                                 var distFromCenter = Math.hypot(hx, hy);
-                                var safeRadius = (w.radius || 2000) - 250;
+                                var arenaRadius = w.radius || 2000;
+                                var wallBuffer = Math.max(380, Math.min(600, meMass * 0.08));
+                                var safeRadius = arenaRadius - wallBuffer;
+
                                 if (distFromCenter > safeRadius) {
-                                    var wallForce = ((distFromCenter - safeRadius) / 250) * 20.0;
+                                    var wallForce = ((distFromCenter - safeRadius) / wallBuffer) * 20.0;
                                     wallFx = -(hx / distFromCenter) * wallForce;
                                     wallFy = -(hy / distFromCenter) * wallForce;
                                 }
 
-                                // При наближенні ворога (<180px) пригнічуємо жадібність до монет заради виживання
-                                var foodWeight = minEnemyDist < 180 ? 0.2 : 1.0;
+                                // 5. Decay-aware баланс жадібності до їжі:
+                                // Якщо маса > 400 (активний розпад (mass - 400)*0.01/сек), потрібне стабільне підживлення
+                                var decayActive = meMass > 400;
+                                var foodWeight = decayActive ? Math.max(0.5, (minEnemyDist < 180 ? 0.3 : 1.0)) : (minEnemyDist < 180 ? 0.2 : 1.0);
 
-                                var finalX = foodFx * foodWeight + avoidFx * 5.0 + wallFx * 7.0;
-                                var finalY = foodFy * foodWeight + avoidFy * 5.0 + wallFy * 7.0;
+                                var finalX = foodFx * foodWeight + clusterFx * 2.0 + avoidFx * 5.0 + wallFx * 7.5;
+                                var finalY = foodFy * foodWeight + clusterFy * 2.0 + avoidFy * 5.0 + wallFy * 7.5;
                                 var targetAngle = Math.atan2(finalY, finalX);
+
+                                // 6. Умови для безпечного та прибуткового Boost (Turbo Vacuum):
+                                // - Кластер з deathDrop >= 21 маси
+                                // - Жодного ворога ближче 250px (строгий запобіжник!)
+                                // - Достатня маса для ривка (minMassForBoost = max(100, mass * 0.5))
+                                // - Відстань до кластера > 40px (ще не досягли)
+                                // - Безпечна відстань від краю арени
+                                var minMassForBoost = Math.max(100, meMass * 0.5);
+                                var shouldBoost = Boolean(
+                                    bestCluster &&
+                                    bestCluster.mass >= 21 &&
+                                    minEnemyDist > 250 &&
+                                    meMass >= minMassForBoost &&
+                                    bestCluster.dist > 40 &&
+                                    distFromCenter < (safeRadius - 100)
+                                );
 
                                 return {
                                     is_dead: isDead,
                                     coins: currentCoins,
                                     len: currentLen,
                                     kills: currentKills,
-                                    angle: targetAngle
+                                    angle: targetAngle,
+                                    mass: meMass,
+                                    enemy_dist: minEnemyDist,
+                                    dist_center: distFromCenter,
+                                    safe_radius: safeRadius,
+                                    cluster_mass: bestCluster ? bestCluster.mass : 0,
+                                    cluster_dist: bestCluster ? bestCluster.dist : 0,
+                                    should_boost: shouldBoost
                                 };
                             })()
                         """)
@@ -794,6 +931,78 @@ def _run_snake_bot_impl(max_runs=3, headless=False):
                                     "y": my
                                 })
 
+                            # Опрацювання Boost (Turbo Vacuum)
+                            me_mass = float(decision.get("mass") or 0)
+                            min_enemy_dist = float(decision.get("enemy_dist") or 9999)
+                            dist_center = float(decision.get("dist_center") or 0)
+                            safe_radius = float(decision.get("safe_radius") or 1750)
+                            cluster_mass = float(decision.get("cluster_mass") or 0)
+                            cluster_dist = float(decision.get("cluster_dist") or 0)
+                            should_boost = bool(decision.get("should_boost"))
+                            now = time.time()
+
+                            if cluster_mass > max_cluster_seen:
+                                max_cluster_seen = cluster_mass
+
+                            # 1. Запобіжники вимкнення активного Boost
+                            if boost_active:
+                                time_boosting = now - boost_start_time
+                                stop_reason = None
+                                if time_boosting >= 1.0:
+                                    stop_reason = "таймаут імпульсу 1.0с"
+                                elif min_enemy_dist < 200:
+                                    stop_reason = f"наближення ворога ({min_enemy_dist:.0f}px < 200px)"
+                                elif dist_center > safe_radius:
+                                    stop_reason = "наближення до стіни арени"
+                                elif me_mass < 100 or (boost_start_mass > 0 and me_mass < boost_start_mass * 0.5):
+                                    stop_reason = f"захист маси ({me_mass:.0f} < {max(100, boost_start_mass * 0.5):.0f})"
+                                elif not should_boost:
+                                    stop_reason = "кластер зібрано / ціль зникла"
+
+                                if stop_reason:
+                                    if not DRY_RUN:
+                                        try:
+                                            sb.driver.execute_cdp_cmd("Input.dispatchKeyEvent", {
+                                                "type": "keyUp",
+                                                "windowsVirtualKeyCode": 32,
+                                                "nativeVirtualKeyCode": 32,
+                                                "code": "Space",
+                                                "key": " ",
+                                                "text": " ",
+                                                "unmodifiedText": " "
+                                            })
+                                        except Exception as e_cdp:
+                                            print(f"[BOT] Помилка keyUp Space: {e_cdp}")
+                                    boost_active = False
+                                    boost_cooldown_until = now + 2.5
+                                    if DRY_RUN:
+                                        print(f"[DRY_RUN BOOST] ⏹️ Зупинка: {stop_reason} (імпульс {time_boosting:.2f}с, маса: {me_mass:.0f})")
+
+                            # 2. Активація Boost при сприятливих умовах
+                            elif should_boost and (now >= boost_cooldown_until):
+                                if DRY_RUN:
+                                    print(f"[DRY_RUN BOOST] 🚀 АКТИВАЦІЯ (імітація)! Кластер: {cluster_mass:.1f} маси на {cluster_dist:.0f}px, Ворог: {min_enemy_dist:.0f}px, Маса: {me_mass:.0f}")
+                                else:
+                                    try:
+                                        sb.execute_script("var c = document.querySelector('#cs-canvas'); if (c) { if (!c.hasAttribute('tabindex')) c.setAttribute('tabindex', '-1'); c.focus(); }")
+                                        sb.driver.execute_cdp_cmd("Input.dispatchKeyEvent", {
+                                            "type": "keyDown",
+                                            "windowsVirtualKeyCode": 32,
+                                            "nativeVirtualKeyCode": 32,
+                                            "code": "Space",
+                                            "key": " ",
+                                            "text": " ",
+                                            "unmodifiedText": " "
+                                        })
+                                        print(f"[BOT] 🚀 BOOST! Кластер {cluster_mass:.0f} маси (ворог {min_enemy_dist:.0f}px, маса {me_mass:.0f})")
+                                    except Exception as e_cdp:
+                                        print(f"[BOT] Помилка keyDown Space: {e_cdp}")
+
+                                boost_active = True
+                                boost_start_time = now
+                                boost_start_mass = me_mass
+                                boost_triggers_count += 1
+
                     except Exception as ex:
                         print(f"[BOT] Помилка циклу: {ex}")
                         break
@@ -801,13 +1010,31 @@ def _run_snake_bot_impl(max_runs=3, headless=False):
                     ticks += 1
                     if ticks % 25 == 0:
                         alive_time = int(time.time() - start_time)
-                        print(f"[BOT] Арена: {alive_time}с | Монети: {score_earned} | З'їдено: {kills_earned}")
+                        boost_tag = " [BOOST]" if boost_active else ""
+                        print(f"[BOT] Арена: {alive_time}с/{max_duration}с | Монети: {score_earned} | З'їдено: {kills_earned} | Маса: {me_mass:.0f}{boost_tag} | Boosts: {boost_triggers_count}")
 
                     time.sleep(0.12)
 
+                # Забезпечуємо відпускання клавіші Space після завершення забігу
+                if boost_active:
+                    if not DRY_RUN:
+                        try:
+                            sb.driver.execute_cdp_cmd("Input.dispatchKeyEvent", {
+                                "type": "keyUp",
+                                "windowsVirtualKeyCode": 32,
+                                "nativeVirtualKeyCode": 32,
+                                "code": "Space",
+                                "key": " ",
+                                "text": " ",
+                                "unmodifiedText": " "
+                            })
+                        except Exception:
+                            pass
+                    boost_active = False
+
                 duration_sec = int(time.time() - start_time)
                 print(f"[BOT] Забіг #{run_idx} тривав {duration_sec} сек.")
-                print(f"      Очки: +{score_earned} | З'їдено змій: {kills_earned}")
+                print(f"      Очки: +{score_earned} | З'їдено змій: {kills_earned} | Активацій boost: {boost_triggers_count} | Макс. кластер: {max_cluster_seen:.0f}")
 
                 # 8. Пауза 6 секунд, щоб екран смерті #cs-dead та сервер повністю синхронізувалися
                 print("[BOT] Очікуємо синхронізацію результату із сервером (6 сек)...")
@@ -820,6 +1047,10 @@ def _run_snake_bot_impl(max_runs=3, headless=False):
                         var deadKills = document.querySelector('#cs-d-kills')?.innerText;
                         var deadTime  = document.querySelector('#cs-d-time')?.innerText;
                         var deadRank  = document.querySelector('#cs-d-rank')?.innerText;
+
+                        // Рекорд сезону (#1 podium)
+                        var topPtsEl = document.querySelector('#cs-podium .cs-pod[data-p="1"] .cs-pod-pts');
+                        var seasonRecord = topPtsEl ? (parseInt(topPtsEl.innerText.replace(/\\D/g, '')) || 48670) : 48670;
 
                         // Список гільдій
                         var guildEls = Array.from(document.querySelectorAll('.cs-g'));
@@ -860,6 +1091,7 @@ def _run_snake_bot_impl(max_runs=3, headless=False):
 
                         return {
                             nick: acc.nick || 'newagno',
+                            season_record: seasonRecord,
                             dead: {
                                 coins: deadCoins,
                                 kills: deadKills,
@@ -888,6 +1120,13 @@ def _run_snake_bot_impl(max_runs=3, headless=False):
                     kills_earned = int("".join(c for c in str(final_kills) if c.isdigit()))
 
                 nick = stats.get("nick", "newagno")
+                season_record = stats.get("season_record", 48670)
+                delta_record = season_record - score_earned
+                if delta_record <= 0:
+                    rec_line = f"🏆 <b>НОВИЙ РЕКОРД СЕЗОНУ!</b> Перевершено топ-1 на +{abs(delta_record):,} монет!"
+                else:
+                    rec_line = f"🎯 До рекорду топ-1 сезону ({season_record:,}): <b>ще {delta_record:,} монет</b>"
+
                 my_guild = stats.get("my_guild") or {}
                 guild_pts = my_guild.get("pts") or "—"
                 guild_place = my_guild.get("place", 3)
@@ -907,7 +1146,9 @@ def _run_snake_bot_impl(max_runs=3, headless=False):
                     f"🎯 <b>Результат цієї гри:</b>\n"
                     f"• Набрано очок: <b>+{score_earned} монет</b> (NEAR ×2)\n"
                     f"• З'їдено змій: <b>{kills_earned}</b>\n"
-                    f"• Час на арені: <b>{duration_sec // 60} хв {duration_sec % 60} сек</b>\n\n"
+                    f"• Час на арені: <b>{duration_sec // 60} хв {duration_sec % 60} сек</b>\n"
+                    f"• Активацій Turbo Boost: <b>{boost_triggers_count}</b>\n"
+                    f"• {rec_line}\n\n"
                     f"👤 <b>Твій профіль ({nick}):</b>\n"
                     f"• Загалом за весь час: <b>{total_coins:,} монет</b>\n"
                     f"• Найкращий забіг: <b>{best_score} монет</b>\n"
@@ -916,7 +1157,7 @@ def _run_snake_bot_impl(max_runs=3, headless=False):
                     f"• Очки гільдії: <b>{guild_pts} монет</b>\n"
                     f"• Місце команди: <b>{guild_place}-е місце {place_medal}</b>\n"
                     f"• Склад: <i>{guild_sub}</i>\n\n"
-                    f"🤖 <i>Режим: AI Векторний радар + нативне ухилення CDP</i>"
+                    f"🤖 <i>Режим: Turbo Vacuum (Space) + Smart Predator + Dynamic Walls</i>"
                 )
 
                 print("[BOT] Надсилаємо оновлений звіт у Telegram...")
@@ -958,7 +1199,7 @@ def run_snake_bot(max_runs=3, headless=False):
 
 if __name__ == "__main__":
 
-    runs = 3
+    runs = 1
     if len(sys.argv) > 1:
         try:
             runs = int(sys.argv[1])

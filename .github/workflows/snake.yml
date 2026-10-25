@@ -10,7 +10,7 @@ on:
       runs:
         description: 'Кількість забігів у цій сесії'
         required: true
-        default: '3'
+        default: '1'
         type: string
 
 # Ensure only one snake session runs at a time
@@ -24,6 +24,7 @@ permissions:
 jobs:
   play_session:
     runs-on: ubuntu-latest
+    timeout-minutes: 60
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
@@ -75,9 +76,10 @@ jobs:
           INCRYPTED_COOKIES: ${{ secrets.INCRYPTED_COOKIES }}
           TG_BOT_TOKEN: ${{ secrets.TG_BOT_TOKEN }}
           TG_CHAT_ID: ${{ secrets.TG_CHAT_ID }}
-          RESIDENTIAL_PROXY: ${{ secrets.RESIDENTIAL_PROXY }}
+          RESIDENTIAL_PROXY: ${{ secrets.RESIDENTIAL_PROXY || secrets.PROXY }}
+          BACKUP_PROXY: ${{ secrets.BACKUP_PROXY || secrets.SECONDARY_PROXY }}
         run: |
-          RUNS_COUNT="${{ github.event.inputs.runs || '3' }}"
+          RUNS_COUNT="${{ github.event.inputs.runs || '1' }}"
           echo "[*] Launching CryptoSnake bot with $RUNS_COUNT runs..."
           xvfb-run --auto-servernum --server-args="-screen 0 1920x1080x24" python src/snake/run.py "$RUNS_COUNT"
 

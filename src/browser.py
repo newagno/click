@@ -10,19 +10,27 @@ def parse_proxy(proxy_str: str) -> dict | None:
     Accepts formats:
       http://user:pass@host:port
       user:pass@host:port
+      host:port:user:pass
     Returns dict with keys: scheme, user, password, host, port
     """
     if not proxy_str:
         return None
         
     scheme = "http"
-    s = proxy_str
+    s = proxy_str.strip()
     
-    if s.startswith("http://"):
-        scheme, s = "http", s[7:]
-    elif s.startswith("https://"):
-        scheme, s = "https", s[8:]
-        
+    for prefix in ("http://", "https://", "socks5://", "socks4://"):
+        if s.startswith(prefix):
+            scheme = prefix.rstrip(":/")
+            s = s[len(prefix):]
+            
+    s = s.split("/")[0].strip()
+
+    # Handle host:port:user:pass format from proxy providers
+    if "@" not in s and s.count(":") == 3:
+        parts = s.split(":")
+        s = f"{parts[2]}:{parts[3]}@{parts[0]}:{parts[1]}"
+
     credentials, _, host_port = s.rpartition('@')
     if not credentials or not host_port:
         return None
@@ -33,12 +41,17 @@ def parse_proxy(proxy_str: str) -> dict | None:
     if not user or not password or not host or not port:
         return None
         
+    try:
+        port_num = int(port)
+    except ValueError:
+        return None
+
     return {
         "scheme": scheme,
         "user": user,
         "password": password,
         "host": host,
-        "port": int(port),
+        "port": port_num,
     }
 
 

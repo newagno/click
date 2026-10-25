@@ -9,7 +9,7 @@ if str(SRC_DIR) not in sys.path:
 from snake.bot import run_snake_bot
 
 if __name__ == "__main__":
-    max_runs = 3
+    max_runs = 1
     headless = False
     
     # Optional CLI args: [number of runs] [--headless]

@@ -69,13 +69,21 @@ jobs:
       - name: Proxy curl sanity check
         if: steps.check.outputs.should_run == 'true' || github.event_name == 'workflow_dispatch'
         env:
-          RESIDENTIAL_PROXY: ${{ secrets.RESIDENTIAL_PROXY }}
+          RESIDENTIAL_PROXY: ${{ secrets.RESIDENTIAL_PROXY || secrets.PROXY }}
+          BACKUP_PROXY: ${{ secrets.BACKUP_PROXY || secrets.SECONDARY_PROXY }}
         run: |
-          if [ -n "$RESIDENTIAL_PROXY" ]; then
-            code=$(curl -x "$RESIDENTIAL_PROXY" -s -o /dev/null -w "%{http_code}" https://1.1.1.1 --max-time 15 || echo FAIL)
-            echo "curl via proxy → $code"
-            if [ "$code" = "FAIL" ]; then echo "::warning::Proxy unreachable from runner — provider/format issue"; fi
-          fi
+          for P in "$RESIDENTIAL_PROXY" "$BACKUP_PROXY"; do
+            if [ -n "$P" ]; then
+              if [[ "$P" =~ ^([^:]+):([0-9]+):([^:]+):([^:]+)$ ]]; then
+                P_CURL="http://${BASH_REMATCH[3]}:${BASH_REMATCH[4]}@${BASH_REMATCH[1]}:${BASH_REMATCH[2]}"
+              else
+                P_CURL="$P"
+              fi
+              code=$(curl -x "$P_CURL" -s -o /dev/null -w "%{http_code}" https://1.1.1.1 --max-time 10 || echo FAIL)
+              echo "curl via proxy ($P_CURL) → $code"
+              if [ "$code" = "FAIL" ]; then echo "::warning::Proxy $P_CURL unreachable from runner"; fi
+            fi
+          done
 
       - name: Execute Claim
         if: steps.check.outputs.should_run == 'true' || github.event_name == 'workflow_dispatch'
@@ -84,7 +92,8 @@ jobs:
           INCRYPTED_PASSWORD: ${{ secrets.INCRYPTED_PASSWORD }}
           TG_BOT_TOKEN: ${{ secrets.TG_BOT_TOKEN }}
           TG_CHAT_ID: ${{ secrets.TG_CHAT_ID }}
-          RESIDENTIAL_PROXY: ${{ secrets.RESIDENTIAL_PROXY }}
+          RESIDENTIAL_PROXY: ${{ secrets.RESIDENTIAL_PROXY || secrets.PROXY }}
+          BACKUP_PROXY: ${{ secrets.BACKUP_PROXY || secrets.SECONDARY_PROXY }}
         run: xvfb-run --auto-servernum --server-args="-screen 0 1920x1080x24" python src/main.py --mode claim
 
       - name: Commit and Push state.json
