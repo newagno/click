@@ -41,10 +41,10 @@ def parse_proxy(proxy_str: str) -> dict | None:
     if not user or not password or not host or not port:
         return None
         
-    try:
-        port_num = int(port)
-    except ValueError:
+    port_clean = "".join(c for c in port if c.isdigit())
+    if not port_clean:
         return None
+    port_num = int(port_clean)
 
     return {
         "scheme": scheme,

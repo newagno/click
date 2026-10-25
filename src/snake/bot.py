@@ -49,7 +49,14 @@ def format_proxy(proxy_str: str) -> str | None:
     # Handle host:port:user:pass format from providers
     if "@" not in s and s.count(":") == 3:
         parts = s.split(":")
-        return f"{parts[2]}:{parts[3]}@{parts[0]}:{parts[1]}"
+        clean_port = "".join(c for c in parts[1] if c.isdigit())
+        return f"{parts[2]}:{parts[3]}@{parts[0]}:{clean_port}"
+    if "@" in s and ":" in s:
+        auth, _, host_port = s.rpartition("@")
+        if ":" in host_port:
+            host, _, port = host_port.partition(":")
+            clean_port = "".join(c for c in port if c.isdigit())
+            return f"{auth}@{host}:{clean_port}"
     return s if s else None
 
 
@@ -61,12 +68,14 @@ def build_proxy_extension(proxy_clean: str) -> str | None:
     credentials, _, host_port = proxy_clean.rpartition("@")
     user, _, pwd = credentials.partition(":")
     host, _, port = host_port.partition(":")
-    if not (user and pwd and host and port):
+    port_clean = "".join(c for c in port if c.isdigit())
+    if not (user and pwd and host and port_clean):
         return None
+    port_num = int(port_clean)
     ext_dir = tempfile.mkdtemp()
     bg_js = f"""var config = {{
         mode: "fixed_servers",
-        rules: {{ singleProxy: {{ scheme: "http", host: "{host}", port: parseInt({int(port)}) }},
+        rules: {{ singleProxy: {{ scheme: "http", host: "{host}", port: {port_num} }},
                   bypassList: ["localhost"] }}
     }};
     chrome.proxy.settings.set({{ value: config, scope: "regular" }}, function(){{}});
