@@ -122,6 +122,70 @@ def is_proxy_working(proxy_raw: str, timeout: int = 7) -> bool:
         return False
 
 
+def _is_cdp_mode(sb) -> bool:
+    """Helper to detect if SeleniumBase is actively operating in CDP Mode."""
+    try:
+        driver = getattr(sb, "driver", None)
+        if driver is not None:
+            # 1. Driver-level private method check if available
+            if hasattr(driver, "_BaseCase__is_cdp_swap_needed"):
+                if driver._BaseCase__is_cdp_swap_needed():
+                    return True
+            # 2. SeleniumBase shared_utils check
+            try:
+                from seleniumbase.fixtures import shared_utils
+                if shared_utils.is_cdp_swap_needed(driver):
+                    return True
+            except Exception:
+                pass
+            # 3. Direct driver cdp mode active check
+            if hasattr(driver, "is_cdp_mode_active") and driver.is_cdp_mode_active():
+                if hasattr(driver, "is_connected") and not driver.is_connected():
+                    return True
+            # 4. Fallback via driver type name
+            driver_type = type(driver).__name__.lower()
+            if "cdp" in driver_type or "undetected" in driver_type:
+                if hasattr(driver, "is_connected") and not driver.is_connected():
+                    return True
+        # 5. sb-level check
+        if hasattr(sb, "_BaseCase__is_cdp_swap_needed") and sb._BaseCase__is_cdp_swap_needed():
+            return True
+    except Exception:
+        pass
+    return False
+
+
+def safe_eval(sb, code: str):
+    """
+    Safely executes JavaScript via sb.execute_script() across both CDP mode and WebDriver mode.
+    - Strips illegal outer 'return' statements when in CDP mode to prevent SyntaxError: Illegal return statement.
+    - Ensures code is enclosed in an IIFE so multiline statements with returns evaluate correctly.
+    - In WebDriver mode, ensures outer 'return' is present so values are returned to Python.
+    - Always delegates to sb.execute_script() to preserve SeleniumBase retries, routing, and logging.
+    """
+    clean = code.strip()
+    is_cdp = _is_cdp_mode(sb)
+
+    clean_r = clean.rstrip().rstrip(";")
+    if clean_r.startswith("return (") and (clean_r.endswith(")()") or clean_r.endswith("})()")):
+        inner_iife = clean_r[len("return "):].strip()
+    elif clean_r.startswith("(()") or clean_r.startswith("(function"):
+        inner_iife = clean_r
+    else:
+        lines = [l.strip() for l in clean.splitlines() if l.strip()]
+        if len(lines) == 1 and lines[0].startswith("return "):
+            expr = lines[0][7:].rstrip(";").strip()
+            script_to_run = expr if is_cdp else f"return {expr};"
+            return sb.execute_script(script_to_run)
+        elif "return " in clean:
+            inner_iife = f"(() => {{\n{clean}\n}})()"
+        else:
+            return sb.execute_script(clean)
+
+    script_to_run = inner_iife if is_cdp else f"return {inner_iife};"
+    return sb.execute_script(script_to_run)
+
+
 def get_binary_path():
     if sys.platform == "win32":
         brave = r"C:\Program Files\BraveSoftware\Brave-Browser\Application\brave.exe"
@@ -339,7 +403,7 @@ def ensure_authenticated(sb):
         sb.uc_open_with_reconnect(GAME_URL, reconnect_time=4)
         sb.sleep(3)
         wait_for_bypass(sb, target_url=GAME_URL, timeout=30)
-        uid = sb.execute_script("return (window.CryptoSnakeWP && window.CryptoSnakeWP.userId) || 0;")
+        uid = safe_eval(sb, "return (window.CryptoSnakeWP && window.CryptoSnakeWP.userId) || 0;")
         if uid:
             print(f"[AUTH] Сесію підтверджено через куки (userId={uid}).")
             return True
@@ -450,13 +514,13 @@ def _run_snake_bot_impl(max_runs=3, headless=False):
                 print(f"\n[BOT] Сторінка гри {GAME_URL} вже відкрита та верифікована.")
 
             for _ in range(8):
-                has_canvas = sb.execute_script("return !!document.querySelector('#cs-canvas');")
+                has_canvas = safe_eval(sb, "return !!document.querySelector('#cs-canvas');")
                 if has_canvas:
                     break
                 sb.sleep(2)
 
             # Перевірка стану акаунта в грі
-            account_status = sb.execute_script("""
+            account_status = safe_eval(sb, """
                 var wp = window.CryptoSnakeWP || {};
                 return {
                     userId: wp.userId || 0,
@@ -473,7 +537,7 @@ def _run_snake_bot_impl(max_runs=3, headless=False):
                 if email and password:
                     print("[BOT] Акаунт не авторизовано (userId=0). Спробуємо увійти через попап...")
                     try:
-                        sb.execute_script("document.querySelector('#cs-start')?.click();")
+                        safe_eval(sb, "document.querySelector('#cs-start')?.click();")
                         sb.sleep(2)
                         if sb.is_element_visible(".incr-popup-login"):
                             sb.type(".incr-popup-login input[type=email], #llms_login", email)
@@ -481,7 +545,7 @@ def _run_snake_bot_impl(max_runs=3, headless=False):
                             sb.sleep(1)
                             sb.click(".incr-popup-login #llms_login_button, #llms_login_button")
                             sb.sleep(5)
-                            account_status = sb.execute_script("""
+                            account_status = safe_eval(sb, """
                                 var wp = window.CryptoSnakeWP || {};
                                 return {
                                     userId: wp.userId || 0,
@@ -494,7 +558,7 @@ def _run_snake_bot_impl(max_runs=3, headless=False):
                         print(f"[BOT] Помилка автоматичного входу: {e_login}")
 
             def ensure_radar_injected():
-                return sb.execute_script("""
+                return safe_eval(sb, """
                     return (() => {
                         if (!window.CryptoSnakeCore || !window.CryptoSnakeCore.World) return 'NO_CORE';
                         if (window.__radarHooked) return 'ALREADY_OK';
@@ -524,7 +588,7 @@ def _run_snake_bot_impl(max_runs=3, headless=False):
 
                 # Перевірка чи вікно все ще відкрите
                 try:
-                    sb.execute_script("return !!document.body;")
+                    safe_eval(sb, "return !!document.body;")
                 except Exception as e_win:
                     print(f"[BOT] Вікно браузера закрите або не відповідає ({e_win}). Зупинка сесії.")
                     break
@@ -532,7 +596,7 @@ def _run_snake_bot_impl(max_runs=3, headless=False):
                 # 1. Якщо раунд > 1: повертаємося в головне меню через кнопку #cs-change
                 if run_idx > 1:
                     try:
-                        sb.execute_script("""
+                        safe_eval(sb, """
                             var changeBtn = document.querySelector('#cs-change');
                             if (changeBtn && !changeBtn.hidden) {
                                 changeBtn.click();
@@ -545,7 +609,7 @@ def _run_snake_bot_impl(max_runs=3, headless=False):
                 # 2. Обираємо команду NEAR (.cs-char.cs-hero-near)
                 print("[BOT] Вибираємо команду NEAR...")
                 for _ in range(6):
-                    selected = sb.execute_script("""
+                    selected = safe_eval(sb, """
                         var el = document.querySelector('.cs-char.cs-hero-near');
                         if (el) { el.click(); return true; }
                         return false;
@@ -557,7 +621,7 @@ def _run_snake_bot_impl(max_runs=3, headless=False):
 
                 # 3. Чекаємо готовності кнопки старту
                 for _ in range(6):
-                    btn_ready = sb.execute_script("""
+                    btn_ready = safe_eval(sb, """
                         var btn = document.querySelector('#cs-start');
                         return btn && !btn.disabled;
                     """)
@@ -566,12 +630,12 @@ def _run_snake_bot_impl(max_runs=3, headless=False):
                     sb.sleep(1)
 
                 # 4. Тиснемо кнопку старту
-                btn_info = sb.execute_script("""
+                btn_info = safe_eval(sb, """
                     var btn = document.querySelector('#cs-start');
                     return { text: btn?.innerText, disabled: btn?.disabled };
                 """) or {}
                 print(f"[BOT] Кнопка старту: '{btn_info.get('text')}' (disabled={btn_info.get('disabled')}). Тиснемо...")
-                sb.execute_script("document.querySelector('#cs-start')?.click();")
+                safe_eval(sb, "document.querySelector('#cs-start')?.click();")
                 sb.sleep(2)
 
                 # 5. Якщо з'явився попап входу, вводимо логін/пароль на місці
@@ -585,7 +649,7 @@ def _run_snake_bot_impl(max_runs=3, headless=False):
                         sb.sleep(1)
                         sb.click(".incr-popup-login #llms_login_button, #llms_login_button")
                         sb.sleep(5)
-                        sb.execute_script("""
+                        safe_eval(sb, """
                             document.querySelector('.cs-char.cs-hero-near')?.click();
                             document.querySelector('#cs-start')?.click();
                         """)
@@ -598,7 +662,7 @@ def _run_snake_bot_impl(max_runs=3, headless=False):
                 print("[BOT] Очікуємо активацію арени (поява HUD)...")
                 game_active = False
                 for check_i in range(25):
-                    hud_active = sb.execute_script("""
+                    hud_active = safe_eval(sb, """
                         var hud = document.querySelector('#cs-hud');
                         return hud && !hud.hidden;
                     """)
@@ -607,14 +671,14 @@ def _run_snake_bot_impl(max_runs=3, headless=False):
                         break
 
                     # Перевіряємо статус попередження (кулдаун попереднього забігу)
-                    status_text = sb.execute_script("""
+                    status_text = safe_eval(sb, """
                         return (document.querySelector('#cs-season-status')?.innerText ||
                                 document.querySelector('#cs-run-warning')?.innerText || '');
                     """)
                     if "активний забіг" in status_text.lower():
                         print(f"[BOT] ⏳ Сервер утримує сесію попереднього забігу. Очікуємо завершення кулдауну ({check_i+1}/25)...")
                         sb.sleep(4)
-                        sb.execute_script("""
+                        safe_eval(sb, """
                             var btn = document.querySelector('#cs-start');
                             if (btn && !btn.disabled) { btn.click(); }
                         """)
@@ -622,14 +686,14 @@ def _run_snake_bot_impl(max_runs=3, headless=False):
 
                     # Якщо з'явилося попередження або кнопка старту все ще активна, пробуємо натиснути ще раз
                     if check_i in (3, 7):
-                        sb.execute_script("""
+                        safe_eval(sb, """
                             var btn = document.querySelector('#cs-start');
                             if (btn && !btn.disabled) { btn.click(); }
                         """)
                     sb.sleep(1)
 
                 if not game_active:
-                    diag = sb.execute_script("""
+                    diag = safe_eval(sb, """
                         return {
                             title: document.title,
                             userId: window.CryptoSnakeWP?.userId || 0,
@@ -659,7 +723,7 @@ def _run_snake_bot_impl(max_runs=3, headless=False):
                     continue
 
                 # 7. Підготовка canvas та розмірів
-                sb.execute_script("""
+                safe_eval(sb, """
                     var c = document.querySelector('#cs-canvas');
                     if (c) {
                         if (!c.hasAttribute('tabindex')) {
@@ -668,7 +732,7 @@ def _run_snake_bot_impl(max_runs=3, headless=False):
                         c.focus();
                     }
                 """)
-                canvas_rect = sb.execute_script("""
+                canvas_rect = safe_eval(sb, """
                     return (() => {
                         var c = document.querySelector('#cs-canvas');
                         if (!c) return null;
@@ -702,7 +766,7 @@ def _run_snake_bot_impl(max_runs=3, headless=False):
                 # Забіг триває доти, доки змійка жива (або вичерпано час сесії)
                 while (time.time() - start_time) < max_duration:
                     try:
-                        decision = sb.execute_script("""
+                        decision = safe_eval(sb, """
                             return (() => {
                                 var canvas = document.querySelector('#cs-canvas');
                                 if (!canvas) return { is_dead: true };
@@ -993,7 +1057,7 @@ def _run_snake_bot_impl(max_runs=3, headless=False):
                                     print(f"[DRY_RUN BOOST] 🚀 АКТИВАЦІЯ (імітація)! Кластер: {cluster_mass:.1f} маси на {cluster_dist:.0f}px, Ворог: {min_enemy_dist:.0f}px, Маса: {me_mass:.0f}")
                                 else:
                                     try:
-                                        sb.execute_script("var c = document.querySelector('#cs-canvas'); if (c) { if (!c.hasAttribute('tabindex')) c.setAttribute('tabindex', '-1'); c.focus(); }")
+                                        safe_eval(sb, "var c = document.querySelector('#cs-canvas'); if (c) { if (!c.hasAttribute('tabindex')) c.setAttribute('tabindex', '-1'); c.focus(); }")
                                         sb.driver.execute_cdp_cmd("Input.dispatchKeyEvent", {
                                             "type": "keyDown",
                                             "windowsVirtualKeyCode": 32,
@@ -1050,7 +1114,7 @@ def _run_snake_bot_impl(max_runs=3, headless=False):
                 sb.sleep(6)
 
                 # 9. Зчитуємо реальні дані з екрана смерті, localStorage та рейтингу
-                stats = sb.execute_script("""
+                stats = safe_eval(sb, """
                     return (() => {
                         var deadCoins = document.querySelector('#cs-d-coins')?.innerText;
                         var deadKills = document.querySelector('#cs-d-kills')?.innerText;
