@@ -325,6 +325,48 @@ def is_cf_challenge(title: str) -> bool:
     return any(m in t for m in CF_CHALLENGE_MARKERS)
 
 
+def format_snake_tg_report(
+    run_idx: int,
+    max_runs: int,
+    score_earned: int,
+    kills_earned: int,
+    duration_sec: int,
+    boost_triggers_count: int,
+    rec_line: str,
+    nick: str,
+    best_score: int,
+    rank_str: str,
+    guild_pts: str,
+    guild_place: int,
+    guild_sub: str
+) -> str:
+    place_medal = "🥇" if guild_place == 1 else ("🥈" if guild_place == 2 else "🥉")
+    return (
+        f"🐍 <b>CryptoSnake — Забіг завершено! (#{run_idx} із {max_runs})</b>\n\n"
+        f"🎯 <b>Результат цієї гри:</b>\n"
+        f"• Набрано очок: <b>+{score_earned:,} монет</b> (NEAR ×2)\n"
+        f"• З'їдено змій: <b>{kills_earned}</b>\n"
+        f"• Час на арені: <b>{duration_sec // 60} хв {duration_sec % 60} сек</b>\n"
+        f"• Активацій Turbo Boost: <b>{boost_triggers_count}</b>\n"
+        f"• {rec_line}\n\n"
+        f"👤 <b>Твій профіль ({nick}):</b>\n"
+        f"• Офіційний рекорд: <b>{best_score:,} монет</b>\n"
+        f"• Місце в рейтингу: <b>{rank_str}</b>\n\n"
+        f"🟢 <b>Команда NEAR:</b>\n"
+        f"• Очки гільдії: <b>{guild_pts} монет</b>\n"
+        f"• Місце команди: <b>{guild_place}-е місце {place_medal}</b>\n"
+        f"• Склад: <i>{guild_sub}</i>\n\n"
+        f"🤖 <i>Режим: Turbo Vacuum (Space) + Smart Predator + Dynamic Walls</i>"
+    )
+
+
+def is_session_timeout(elapsed: float, is_ci: bool) -> bool:
+    """Hard watchdog check for CI runs (cutoff at 3000s / 50 min)."""
+    if is_ci and elapsed >= 3000:
+        return True
+    return False
+
+
 def wait_for_bypass(sb, target_url="https://incrypted.com/cryptosnake/", timeout=50) -> bool:
     """Wait for page to finish loading and pass Cloudflare Turnstile if present.
     In UC mode: do NOT make intrusive CDP calls while Turnstile is active.
@@ -598,8 +640,15 @@ def _run_snake_bot_impl(max_runs=3, headless=False):
             print(f"[BOT] Ін'єкція радарного перехоплювача: {ensure_radar_injected()}")
             sb.sleep(1)
 
+            session_start_time = time.time()
+            is_ci = bool(os.getenv("GITHUB_ACTIONS"))
+
             for run_idx in range(1, max_runs + 1):
                 print(f"\n{'='*25} РАУНД #{run_idx} із {max_runs} {'='*25}")
+
+                if is_session_timeout(time.time() - session_start_time, is_ci):
+                    print("[BOT] ⏰ 50 хв сесії вичерпано (watchdog), планове завершення сесії перед лімітом CI.")
+                    break
 
                 # Перевірка чи вікно все ще відкрите
                 try:
@@ -780,6 +829,10 @@ def _run_snake_bot_impl(max_runs=3, headless=False):
 
                 # Забіг триває доти, доки змійка жива (або вичерпано час сесії)
                 while (time.time() - start_time) < max_duration:
+                    if is_session_timeout(time.time() - session_start_time, is_ci):
+                        print("[BOT] ⏰ 50 хв сесії вичерпано (watchdog), планове завершення поточного забігу.")
+                        break
+
                     try:
                         decision = safe_eval(sb, """
                             return (() => {
@@ -1233,23 +1286,20 @@ def _run_snake_bot_impl(max_runs=3, headless=False):
                 place_medal = "🥇" if guild_place == 1 else ("🥈" if guild_place == 2 else "🥉")
 
                 # 10. Формуємо детальний звіт у Telegram
-                tg_message = (
-                    f"🐍 <b>CryptoSnake — Забіг завершено! (#{run_idx} із {max_runs})</b>\n\n"
-                    f"🎯 <b>Результат цієї гри:</b>\n"
-                    f"• Набрано очок: <b>+{score_earned} монет</b> (NEAR ×2)\n"
-                    f"• З'їдено змій: <b>{kills_earned}</b>\n"
-                    f"• Час на арені: <b>{duration_sec // 60} хв {duration_sec % 60} сек</b>\n"
-                    f"• Активацій Turbo Boost: <b>{boost_triggers_count}</b>\n"
-                    f"• {rec_line}\n\n"
-                    f"👤 <b>Твій профіль ({nick}):</b>\n"
-                    f"• Загалом за весь час: <b>{total_coins:,} монет</b>\n"
-                    f"• Найкращий забіг: <b>{best_score} монет</b>\n"
-                    f"• Місце в рейтингу: <b>{rank_str}</b>\n\n"
-                    f"🟢 <b>Команда NEAR:</b>\n"
-                    f"• Очки гільдії: <b>{guild_pts} монет</b>\n"
-                    f"• Місце команди: <b>{guild_place}-е місце {place_medal}</b>\n"
-                    f"• Склад: <i>{guild_sub}</i>\n\n"
-                    f"🤖 <i>Режим: Turbo Vacuum (Space) + Smart Predator + Dynamic Walls</i>"
+                tg_message = format_snake_tg_report(
+                    run_idx=run_idx,
+                    max_runs=max_runs,
+                    score_earned=score_earned,
+                    kills_earned=kills_earned,
+                    duration_sec=duration_sec,
+                    boost_triggers_count=boost_triggers_count,
+                    rec_line=rec_line,
+                    nick=nick,
+                    best_score=best_score,
+                    rank_str=rank_str,
+                    guild_pts=guild_pts,
+                    guild_place=guild_place,
+                    guild_sub=guild_sub
                 )
 
                 print("[BOT] Надсилаємо оновлений звіт у Telegram...")
