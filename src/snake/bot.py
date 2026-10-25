@@ -742,7 +742,13 @@ def _run_snake_bot_impl(max_runs=3, headless=False):
                     return { text: btn?.innerText, disabled: btn?.disabled };
                 """) or {}
                 print(f"[BOT] Кнопка старту: '{btn_info.get('text')}' (disabled={btn_info.get('disabled')}). Тиснемо...")
-                safe_eval(sb, "document.querySelector('#cs-start')?.click();")
+                safe_eval(sb, """
+                    var btn = document.querySelector('#cs-start');
+                    if (btn && !btn.disabled) {
+                        btn.scrollIntoView({ block: 'center' });
+                        btn.click();
+                    }
+                """)
                 sb.sleep(2)
 
                 # 5. Якщо з'явився попап входу, вводимо логін/пароль на місці
@@ -758,7 +764,11 @@ def _run_snake_bot_impl(max_runs=3, headless=False):
                         sb.sleep(5)
                         safe_eval(sb, """
                             document.querySelector('.cs-char.cs-hero-near')?.click();
-                            document.querySelector('#cs-start')?.click();
+                            var btn = document.querySelector('#cs-start');
+                            if (btn && !btn.disabled) {
+                                btn.scrollIntoView({ block: 'center' });
+                                btn.click();
+                            }
                         """)
                         sb.sleep(2)
                     except Exception as e_pop:
@@ -777,37 +787,47 @@ def _run_snake_bot_impl(max_runs=3, headless=False):
                         game_active = True
                         break
 
-                    # Перевіряємо статус попередження (кулдаун попереднього забігу)
+                    # Перевіряємо статус попередження (кулдаун попереднього забігу тільки якщо елемент НЕ прихований)
                     status_text = safe_eval(sb, """
-                        return (document.querySelector('#cs-season-status')?.innerText ||
-                                document.querySelector('#cs-run-warning')?.innerText || '');
+                        var s = document.querySelector('#cs-season-status');
+                        var w = document.querySelector('#cs-run-warning');
+                        return ((s && !s.hidden) ? (s.innerText || '') : ((w && !w.hidden) ? (w.innerText || '') : ''));
                     """)
                     if "активний забіг" in status_text.lower():
                         print(f"[BOT] ⏳ Сервер утримує сесію попереднього забігу. Очікуємо завершення кулдауну ({check_i+1}/25)...")
                         sb.sleep(4)
                         safe_eval(sb, """
                             var btn = document.querySelector('#cs-start');
-                            if (btn && !btn.disabled) { btn.click(); }
+                            if (btn && !btn.disabled) {
+                                btn.scrollIntoView({ block: 'center' });
+                                btn.click();
+                            }
                         """)
                         continue
 
-                    # Якщо з'явилося попередження або кнопка старту все ще активна, пробуємо натиснути ще раз
-                    if check_i in (3, 7):
+                    # Якщо кнопка старту все ще активна, пробуємо натиснути ще раз
+                    if check_i in (4, 10, 16):
                         safe_eval(sb, """
                             var btn = document.querySelector('#cs-start');
-                            if (btn && !btn.disabled) { btn.click(); }
+                            if (btn && !btn.disabled) {
+                                btn.scrollIntoView({ block: 'center' });
+                                btn.click();
+                            }
                         """)
                     sb.sleep(1)
 
                 if not game_active:
                     diag = safe_eval(sb, """
+                        var s = document.querySelector('#cs-season-status');
+                        var w = document.querySelector('#cs-run-warning');
+                        var activeWarn = ((s && !s.hidden) ? s.innerText : ((w && !w.hidden) ? w.innerText : ''));
                         return {
                             title: document.title,
                             userId: window.CryptoSnakeWP?.userId || 0,
                             btnText: document.querySelector('#cs-start')?.innerText,
                             btnDisabled: document.querySelector('#cs-start')?.disabled,
                             hasPopup: !!document.querySelector('.incr-popup-login'),
-                            warn: document.querySelector('#cs-run-warning')?.innerText || document.querySelector('#cs-season-status')?.innerText
+                            warn: activeWarn
                         };
                     """) or {}
                     print(f"[BOT] ПОМИЛКА: Гра не перейшла в режим бою. Діагностика: {diag}")
@@ -857,8 +877,8 @@ def _run_snake_bot_impl(max_runs=3, headless=False):
                 ticks = 0
 
                 if DRY_RUN:
-                    max_duration = 180  # 3 хвилини для тестової перевірки DRY_RUN
-                    print("[BOT] 🧪 УВІМКНЕНО DRY_RUN (3 хв тест). CDP Space імітується, вимірюємо кластери та запобіжники.")
+                    max_duration = int(os.getenv("MAX_DURATION", "180"))
+                    print(f"[BOT] 🧪 УВІМКНЕНО DRY_RUN ({max_duration}с тест). CDP Space імітується, вимірюємо кластери та запобіжники.")
                 else:
                     default_duration = 2100 if os.getenv("GITHUB_ACTIONS") else 2400
                     max_duration = int(os.getenv("MAX_DURATION", default_duration))
