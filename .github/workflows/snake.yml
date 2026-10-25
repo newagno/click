@@ -12,6 +12,14 @@ on:
         required: true
         default: '1'
         type: string
+      dry_run:
+        description: 'Режим DRY_RUN (0 = грати на повну з Space boost, 1 = симуляція 3 хв)'
+        required: false
+        default: '0'
+        type: choice
+        options:
+          - '0'
+          - '1'
 
 # Ensure only one snake session runs at a time
 concurrency:
@@ -50,23 +58,25 @@ jobs:
 
       - name: Proxy Sanity Check
         env:
-          RESIDENTIAL_PROXY: ${{ secrets.RESIDENTIAL_PROXY }}
+          RESIDENTIAL_PROXY: ${{ secrets.RESIDENTIAL_PROXY || secrets.PROXY }}
+          BACKUP_PROXY: ${{ secrets.BACKUP_PROXY || secrets.SECONDARY_PROXY }}
         run: |
           python -c "
           import os, sys
           sys.path.insert(0, '.')
           from src.snake.bot import format_proxy, is_proxy_working
-          raw = os.getenv('RESIDENTIAL_PROXY')
-          if raw:
-              clean = format_proxy(raw)
-              host_disp = clean.split('@')[-1] if clean else 'invalid'
-              print(f'[*] Testing proxy: {host_disp}...')
-              ok = is_proxy_working(raw, timeout=10)
-              print(f'[*] Proxy reachable: {ok}')
-              if not ok:
-                  print('::warning::Proxy check failed (407 Auth or Timeout). Bot will attempt direct connection or Turnstile bypass.')
-          else:
-              print('[*] No RESIDENTIAL_PROXY configured')
+          for name in ('RESIDENTIAL_PROXY', 'BACKUP_PROXY'):
+              raw = os.getenv(name)
+              if raw:
+                  clean = format_proxy(raw)
+                  host_disp = clean.split('@')[-1] if clean else 'invalid'
+                  print(f'[*] Testing {name}: {host_disp}...')
+                  ok = is_proxy_working(raw, timeout=10)
+                  print(f'[*] {name} reachable: {ok}')
+                  if not ok:
+                      print(f'::warning::{name} check failed.')
+              else:
+                  print(f'[*] No {name} configured')
           "
 
       - name: Run CryptoSnake Bot
@@ -78,10 +88,23 @@ jobs:
           TG_CHAT_ID: ${{ secrets.TG_CHAT_ID }}
           RESIDENTIAL_PROXY: ${{ secrets.RESIDENTIAL_PROXY || secrets.PROXY }}
           BACKUP_PROXY: ${{ secrets.BACKUP_PROXY || secrets.SECONDARY_PROXY }}
+          DRY_RUN: ${{ github.event.inputs.dry_run || '0' }}
         run: |
           RUNS_COUNT="${{ github.event.inputs.runs || '1' }}"
-          echo "[*] Launching CryptoSnake bot with $RUNS_COUNT runs..."
+          echo "[*] Launching CryptoSnake bot with $RUNS_COUNT runs (DRY_RUN=$DRY_RUN)..."
           xvfb-run --auto-servernum --server-args="-screen 0 1920x1080x24" python src/snake/run.py "$RUNS_COUNT"
+
+      - name: Commit and Push cookies
+        if: always()
+        run: |
+          if [[ -n $(git status -s incrypted_cookies.json) ]]; then
+            git config --global user.name "github-actions[bot]"
+            git config --global user.email "github-actions[bot]@users.noreply.github.com"
+            git add incrypted_cookies.json
+            git commit -m "Update cookies [skip ci]" || echo "No changes"
+            git pull --rebase origin main || true
+            git push origin HEAD:main || true
+          fi
 
       - name: Upload debug artifacts
         if: always()
