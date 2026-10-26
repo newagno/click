@@ -686,8 +686,12 @@ def _run_snake_bot_impl(max_runs=3, headless=False):
             session_start_time = time.time()
             is_ci = bool(os.getenv("GITHUB_ACTIONS"))
 
-            for run_idx in range(1, max_runs + 1):
-                print(f"\n{'='*25} РАУНД #{run_idx} із {max_runs} {'='*25}")
+            run_idx = 1
+            attempts = 0
+            max_attempts = max_runs * 4  # Дозволяємо до 4 спроб на 1 забіг
+            while run_idx <= max_runs and attempts < max_attempts:
+                attempts += 1
+                print(f"\n{'='*25} РАУНД #{run_idx} (Спроба {attempts}/{max_attempts}) {'='*25}")
 
                 if is_session_timeout(time.time() - session_start_time, is_ci):
                     print("[BOT] ⏰ 50 хв сесії вичерпано (watchdog), планове завершення сесії перед лімітом CI.")
@@ -1072,7 +1076,8 @@ def _run_snake_bot_impl(max_runs=3, headless=False):
                                 }
 
                                 var pathSafeSteeringBlocked = Boolean(bestCluster && bestCluster.dist > 1 && !isPathSafe);
-                                var blockSteeringOnUnsafe = Boolean(window.__blockSteeringOnUnsafe);
+                                // Блокуємо кермо тільки для великої змійки (Фаза 2+), щоб не голодувати на старті
+                                var blockSteeringOnUnsafe = Boolean(window.__blockSteeringOnUnsafe) && meMass > 400;
 
                                 // Притягання до кластера (діє на дистанції > 55px; ближче 55px веде точний foodFx по монетах)
                                 if (bestCluster && bestCluster.dist > 55 && (!blockSteeringOnUnsafe || isPathSafe)) {
@@ -1513,8 +1518,18 @@ def _run_snake_bot_impl(max_runs=3, headless=False):
                 print("[BOT] Надсилаємо оновлений звіт у Telegram...")
                 send_telegram_message(tg_message)
 
-                # 11. Пауза між раундами
-                if run_idx < max_runs:
+                # Перевірка на спавн-смерть (менше 90 секунд)
+                if duration_sec < 90 and not DRY_RUN and attempts < max_attempts:
+                    print(f"[BOT] ⚠️ Спавн-смерть на {duration_sec}с. Перезапуск спроби {attempts+1}...")
+                    try:
+                        sb.uc_open_with_reconnect(GAME_URL, reconnect_time=4)
+                        sb.sleep(3)
+                    except Exception:
+                        pass
+                    continue  # Повторюємо той самий run_idx
+
+                run_idx += 1
+                if run_idx <= max_runs:
                     print("[BOT] Пауза 5 секунд перед наступним забігом...")
                     sb.sleep(5)
 
