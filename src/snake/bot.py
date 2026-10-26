@@ -1397,8 +1397,12 @@ def _run_snake_bot_impl(max_runs=3, headless=False):
                         var totalCoins = allCoins.reduce((a, b) => a + b, 0);
 
                         // Соло-рейтинг користувача
-                        var myRow = document.querySelector('#cs-solo .cs-prow.me');
-                        var soloRank = myRow ? myRow.querySelector('.rk')?.innerText : null;
+                        var soloRankRaw = 
+                            document.querySelector('#cs-solo .cs-prow.me .rk')?.innerText
+                            || document.querySelector('.cs-prow.me .rk')?.innerText
+                            || document.querySelector('[data-me="1"] .rk')?.innerText
+                            || null;
+                        var deadRankRaw = document.querySelector('#cs-d-rank')?.innerText || null;
 
                         return {
                             nick: acc.nick || 'newagno',
@@ -1414,7 +1418,8 @@ def _run_snake_bot_impl(max_runs=3, headless=False):
                                 best_score: bestScore,
                                 total_coins: totalCoins,
                                 total_runs: runs.length,
-                                solo_rank: soloRank
+                                solo_rank: soloRankRaw,
+                                dead_rank: deadRankRaw
                             }
                         };
                     })()
@@ -1446,8 +1451,25 @@ def _run_snake_bot_impl(max_runs=3, headless=False):
                 history = stats.get("history") or {}
                 best_score = max(score_earned, history.get("best_score", score_earned))
                 total_coins = history.get("total_coins", score_earned)
-                solo_rank = history.get("solo_rank")
-                rank_str = f"#{solo_rank}" if solo_rank else "поза топ-20"
+
+                import re as _re
+                def _extract_rank_int(text):
+                    if not text:
+                        return None
+                    m = _re.search(r'\d+', str(text))
+                    return int(m.group()) if m else None
+
+                solo_rank_raw = stats.get("solo_rank") or history.get("solo_rank")
+                dead_rank_raw = stats.get("dead_rank") or (stats.get("dead") or {}).get("rank")
+                season_rank_num = _extract_rank_int(solo_rank_raw)
+                round_rank_num  = _extract_rank_int(dead_rank_raw)
+
+                if season_rank_num:
+                    rank_str = f"#{season_rank_num} (сезон)"
+                elif round_rank_num:
+                    rank_str = f"#{round_rank_num} (цей забіг, поза топ-20 сезону)"
+                else:
+                    rank_str = "поза топ-20 сезону"
 
                 # 10. Формуємо детальний звіт у Telegram
                 tg_message = format_snake_tg_report(
