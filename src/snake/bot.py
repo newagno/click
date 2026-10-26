@@ -369,7 +369,7 @@ PATH_SAFE_CONE_RAD = math.radians(PATH_SAFE_CONE_DEG)
 
 def is_session_timeout(elapsed: float, is_ci: bool) -> bool:
     """Hard watchdog check for runs (cutoff at limit + 60s buffer for sync/reporting)."""
-    limit = 2100 if is_ci else 2400
+    limit = 3100 if is_ci else 3300
     return elapsed >= (limit + 60)
 
 
@@ -880,7 +880,7 @@ def _run_snake_bot_impl(max_runs=3, headless=False):
                     max_duration = int(os.getenv("MAX_DURATION", "180"))
                     print(f"[BOT] 🧪 УВІМКНЕНО DRY_RUN ({max_duration}с тест). CDP Space імітується, вимірюємо кластери та запобіжники.")
                 else:
-                    default_duration = 2100 if os.getenv("GITHUB_ACTIONS") else 2400
+                    default_duration = 3000 if os.getenv("GITHUB_ACTIONS") else 3200
                     max_duration = int(os.getenv("MAX_DURATION", default_duration))
                     print(f"[BOT] Змійка на полі! Марафон на {max_duration // 60} хв: Turbo Vacuum (Space) + Smart Predator + Dynamic Walls...")
 
@@ -958,8 +958,13 @@ def _run_snake_bot_impl(max_runs=3, headless=False):
 
                                 var hx = me.pts[0];
                                 var hy = me.pts[1];
+                                var headingX = (me.pts.length >= 4) ? (hx - me.pts[2]) : Math.cos(me.ang || 0);
+                                var headingY = (me.pts.length >= 4) ? (hy - me.pts[3]) : Math.sin(me.ang || 0);
+                                var hNorm = Math.hypot(headingX, headingY) || 1.0;
+                                headingX /= hNorm;
+                                headingY /= hNorm;
 
-                                // 1. Пошук монет та виявлення дропу після загибелі змій (!f.natural)
+                                // 1. Пошук монет із курсовим пріоритетом (Forward Cone) та розширений сканер дропу (520px)
                                 var foodFx = 0;
                                 var foodFy = 0;
                                 var drops = [];
@@ -972,18 +977,24 @@ def _run_snake_bot_impl(max_runs=3, headless=False):
                                         var dist = Math.hypot(dx, dy);
                                         if (dist < 1) continue;
 
-                                        // Базовий радар їжі (до 650px) з пріоритетом гільдійських монет NEAR (×3.0)
-                                        if (dist <= 650) {
-                                            var valMult = (f.natural === false && f.v) ? Math.min(2.0, Math.sqrt(f.v)) : 1.0;
-                                            var weight = (f.type === 'near' ? 3.0 : 1.0) * valMult;
-                                            var force = weight / (dist * dist);
-                                            foodFx += (dx / dist) * force;
-                                            foodFy += (dy / dist) * force;
+                                        var ux = dx / dist;
+                                        var uy = dy / dist;
+                                        var cosAngle = ux * headingX + uy * headingY;
+
+                                        // Ігноруємо дрібні монети у сліпій зоні за головою (< 55px і кут > 95°), щоб не крутитися на місці
+                                        if (dist < 55 && cosAngle < -0.1 && f.natural !== false) continue;
+
+                                        if (dist <= 680) {
+                                            var valMult = (f.natural === false && f.v) ? Math.min(2.5, Math.sqrt(f.v) * 1.15) : 1.0;
+                                            var alignMult = 1.0 + 0.55 * cosAngle; // 1.55x прямо за курсом, 0.45x позаду
+                                            var weight = (f.type === 'near' ? 3.5 : 1.0) * valMult * alignMult;
+                                            var effDist = dist * (dist + 35.0);
+                                            var force = weight / effDist;
+                                            foodFx += ux * force;
+                                            foodFy += uy * force;
                                         }
 
-                                        // Дроп після загибелі змій (f.natural === false) для кластеризації (безпечний радіус 320px)
-                                        // Використовуємо поле f.v (маса монети в рушії cryptosnake)
-                                        if (f.natural === false && dist <= 320) {
+                                        if (f.natural === false && dist <= 520) {
                                             drops.push({ x: f.x, y: f.y, v: (f.v || 1), dist: dist });
                                         }
                                     }
@@ -1063,11 +1074,11 @@ def _run_snake_bot_impl(max_runs=3, headless=False):
                                 var pathSafeSteeringBlocked = Boolean(bestCluster && bestCluster.dist > 1 && !isPathSafe);
                                 var blockSteeringOnUnsafe = Boolean(window.__blockSteeringOnUnsafe);
 
-                                // Притягання до кластера (якщо blockSteeringOnUnsafe вимкнено — руль діє завжди)
-                                if (bestCluster && bestCluster.dist > 1 && (!blockSteeringOnUnsafe || isPathSafe)) {
+                                // Притягання до кластера (діє на дистанції > 55px; ближче 55px веде точний foodFx по монетах)
+                                if (bestCluster && bestCluster.dist > 55 && (!blockSteeringOnUnsafe || isPathSafe)) {
                                     var cDist = bestCluster.dist;
-                                    var cappedMass = Math.min(bestCluster.mass, 60);
-                                    var cForce = (cappedMass / (cDist * cDist)) * 0.7;
+                                    var cappedMass = Math.min(bestCluster.mass, 65);
+                                    var cForce = (cappedMass / (cDist * cDist)) * 0.75;
                                     clusterFx = ((bestCluster.x - hx) / cDist) * cForce;
                                     clusterFy = ((bestCluster.y - hy) / cDist) * cForce;
                                 }
@@ -1159,12 +1170,14 @@ def _run_snake_bot_impl(max_runs=3, headless=False):
                                 // - Відстань до кластера > 40px (ще не досягли)
                                 // - Безпечна відстань від краю арени
                                 var minMassForBoost = window.__minMassForBoost || 350;
+                                var maxBoostDist = (bestCluster && bestCluster.mass >= 40) ? 420 : 280;
                                 var boostCandidate = Boolean(
                                     bestCluster &&
                                     bestCluster.mass >= 21 &&
-                                    minEnemyDist > 250 &&
+                                    minEnemyDist > 240 &&
                                     meMass >= minMassForBoost &&
-                                    bestCluster.dist > 40 &&
+                                    bestCluster.dist > 45 &&
+                                    bestCluster.dist <= maxBoostDist &&
                                     distFromCenter < (safeRadius - 100)
                                 );
                                 var shouldBoost = boostCandidate && isPathSafe;
@@ -1211,6 +1224,14 @@ def _run_snake_bot_impl(max_runs=3, headless=False):
                                 break
 
                             target_angle = decision.get("angle")
+                            elapsed_run = time.time() - start_time
+                            # За 15 секунд до кінця марафону скеровуємо змійку в найближчу стіну для гарантованої фіксації рекорду на сервері
+                            if not DRY_RUN and elapsed_run >= (max_duration - 15):
+                                target_angle = safe_eval(sb, """
+                                    var w = window.__activeWorld;
+                                    var me = w && window.__mySnakeId !== undefined ? w.snakes.get(window.__mySnakeId) : null;
+                                    return (me && me.pts) ? Math.atan2(me.pts[1], me.pts[0]) : 0.0;
+                                """)
                             if target_angle is not None:
                                 radius = 160
                                 mx = int(cx + radius * math.cos(target_angle))
@@ -1273,7 +1294,8 @@ def _run_snake_bot_impl(max_runs=3, headless=False):
                                         except Exception as e_cdp:
                                             print(f"[BOT] Помилка keyUp Space: {e_cdp}")
                                     boost_active = False
-                                    boost_cooldown_until = now + 2.5
+                                    # Каскадний буст: якщо попереду ще лежить великий труп (>= 35 маси) і чисто, кулдаун 0.65с замість 2.2с
+                                    boost_cooldown_until = now + (0.65 if (cluster_mass >= 35 and min_enemy_dist > 230) else 2.2)
                                     if DRY_RUN:
                                         print(f"[DRY_RUN BOOST] ⏹️ Зупинка: {stop_reason} (імпульс {time_boosting:.2f}с, маса: {me_mass:.0f})")
 
@@ -1319,12 +1341,12 @@ def _run_snake_bot_impl(max_runs=3, headless=False):
                     if DRY_RUN and (ticks % 10 == 0):
                         print(f"[DRY] mass={me_mass:.0f} phase={phase_val} avoidR={avoid_r_val:.0f} foodW={food_w_val:.1f} clusterW={cluster_w_val:.1f}")
 
-                    if ticks % 25 == 0:
+                    if ticks % 50 == 0:
                         alive_time = int(time.time() - start_time)
                         boost_tag = " [BOOST]" if boost_active else ""
                         print(f"[BOT] Арена: {alive_time}с/{max_duration}с | Монети: {score_earned} | З'їдено: {kills_earned} | Маса: {me_mass:.0f}{boost_tag} | Фаза {phase_val} (avoidR {avoid_r_val:.0f}) | Boosts: {boost_triggers_count} (block B:{path_safe_blocked_count}/S:{path_safe_steering_blocked_count})")
 
-                    time.sleep(0.12)
+                    time.sleep(0.05)
 
                 # Забезпечуємо відпускання клавіші Space після завершення забігу
                 if boost_active:

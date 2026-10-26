@@ -20,6 +20,11 @@ on:
         options:
           - '0'
           - '1'
+      max_duration:
+        description: 'Тривалість забігу в секундах (600 = 10хв тест, 3000 = 50хв production)'
+        required: false
+        default: '3000'
+        type: string
 
 # Ensure only one snake session runs at a time
 concurrency:
@@ -34,7 +39,6 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 120
     env:
-      MAX_DURATION: "2100"
       MIN_MASS_FOR_BOOST: "400"
       BLOCK_STEERING_ON_UNSAFE: "0"
       ENABLE_CORE_FX: "0"
@@ -95,8 +99,10 @@ jobs:
           RESIDENTIAL_PROXY: ${{ secrets.RESIDENTIAL_PROXY || secrets.PROXY }}
           BACKUP_PROXY: ${{ secrets.BACKUP_PROXY || secrets.SECONDARY_PROXY }}
           DRY_RUN: ${{ github.event.inputs.dry_run || '0' }}
+          MAX_DURATION: ${{ github.event.inputs.max_duration || '3000' }}
         run: |
           RUNS_COUNT="${{ github.event.inputs.runs || '1' }}"
+          echo "[*] MAX_DURATION=$MAX_DURATION (input: ${{ github.event.inputs.max_duration || 'default' }})"
           echo "[*] Launching CryptoSnake bot with $RUNS_COUNT runs (DRY_RUN=$DRY_RUN)..."
           xvfb-run --auto-servernum --server-args="-screen 0 1920x1080x24" python src/snake/run.py "$RUNS_COUNT"
 
