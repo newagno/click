@@ -974,7 +974,8 @@ def _run_snake_bot_impl(max_runs=3, headless=False):
 
                                         // Базовий радар їжі (до 650px) з пріоритетом гільдійських монет NEAR (×3.0)
                                         if (dist <= 650) {
-                                            var weight = f.type === 'near' ? 3.0 : 1.0;
+                                            var valMult = (f.natural === false && f.v) ? Math.min(2.0, Math.sqrt(f.v)) : 1.0;
+                                            var weight = (f.type === 'near' ? 3.0 : 1.0) * valMult;
                                             var force = weight / (dist * dist);
                                             foodFx += (dx / dist) * force;
                                             foodFy += (dy / dist) * force;
@@ -1021,13 +1022,15 @@ def _run_snake_bot_impl(max_runs=3, headless=False):
                                             var cx_drop = sumX / cMass;
                                             var cy_drop = sumY / cMass;
                                             var cDist = Math.hypot(cx_drop - hx, cy_drop - hy);
-                                            if (!bestCluster || cMass > bestCluster.mass) {
+                                            var cScore = cMass / Math.max(20, cDist);
+                                            if (!bestCluster || cScore > (bestCluster.score || 0)) {
                                                 bestCluster = {
                                                     mass: cMass,
                                                     count: cCount,
                                                     x: cx_drop,
                                                     y: cy_drop,
-                                                    dist: cDist
+                                                    dist: cDist,
+                                                    score: cScore
                                                 };
                                             }
                                         }
@@ -1063,13 +1066,14 @@ def _run_snake_bot_impl(max_runs=3, headless=False):
                                 // Притягання до кластера (якщо blockSteeringOnUnsafe вимкнено — руль діє завжди)
                                 if (bestCluster && bestCluster.dist > 1 && (!blockSteeringOnUnsafe || isPathSafe)) {
                                     var cDist = bestCluster.dist;
-                                    var cForce = (bestCluster.mass / (cDist * cDist)) * 1.0;
+                                    var cappedMass = Math.min(bestCluster.mass, 60);
+                                    var cForce = (cappedMass / (cDist * cDist)) * 0.7;
                                     clusterFx = ((bestCluster.x - hx) / cDist) * cForce;
                                     clusterFy = ((bestCluster.y - hy) / cDist) * cForce;
                                 }
 
-                                // 3. Ухилення від ворожих змій з динамічною зоною безпеки за масою (220-400px)
-                                var avoidRadius = Math.max(220, Math.min(400, 180 + meMass * 0.08));
+                                // 3. Ухилення від ворожих змій з динамічною зоною безпеки за масою (200-240px)
+                                var avoidRadius = Math.max(200, Math.min(240, 180 + meMass * 0.06));
                                 var avoidFx = 0;
                                 var avoidFy = 0;
                                 var minEnemyDist = 9999;
@@ -1095,12 +1099,12 @@ def _run_snake_bot_impl(max_runs=3, headless=False):
                                     }
                                 }
 
-                                // 4. Відштовхування від меж арени (динамічний safeRadius від 380px до 600px)
+                                // 4. Відштовхування від меж арени (динамічний safeRadius від 280px до 400px)
                                 var wallFx = 0;
                                 var wallFy = 0;
                                 var distFromCenter = Math.hypot(hx, hy);
                                 var arenaRadius = w.radius || 2000;
-                                var wallBuffer = Math.max(380, Math.min(600, meMass * 0.08));
+                                var wallBuffer = Math.max(250, Math.min(320, meMass * 0.05));
                                 var safeRadius = arenaRadius - wallBuffer;
 
                                 if (distFromCenter > safeRadius) {
@@ -1129,6 +1133,7 @@ def _run_snake_bot_impl(max_runs=3, headless=False):
 
                                 if (minEnemyDist < 180) {
                                     foodWeight *= 0.5;
+                                    clusterWeight *= 0.3;
                                 }
 
                                 // М'яке відхилення від ядра (coreFx) контролюється прапорцем експерименту (I1/I2)
@@ -1242,8 +1247,8 @@ def _run_snake_bot_impl(max_runs=3, headless=False):
                             if boost_active:
                                 time_boosting = now - boost_start_time
                                 stop_reason = None
-                                if time_boosting >= 1.0:
-                                    stop_reason = "таймаут імпульсу 1.0с"
+                                if time_boosting >= 0.45:
+                                    stop_reason = "таймаут імпульсу 0.45с"
                                 elif min_enemy_dist < 200:
                                     stop_reason = f"наближення ворога ({min_enemy_dist:.0f}px < 200px)"
                                 elif dist_center > safe_radius:
