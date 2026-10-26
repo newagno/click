@@ -40,7 +40,7 @@ jobs:
     timeout-minutes: 120
     env:
       MIN_MASS_FOR_BOOST: "400"
-      BLOCK_STEERING_ON_UNSAFE: "0"
+      BLOCK_STEERING_ON_UNSAFE: "1"
       ENABLE_CORE_FX: "0"
       DRY_RUN: "0"
     steps:

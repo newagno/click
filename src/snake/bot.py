@@ -986,7 +986,7 @@ def _run_snake_bot_impl(max_runs=3, headless=False):
 
                                         if (dist <= 680) {
                                             var valMult = (f.natural === false && f.v) ? Math.min(2.5, Math.sqrt(f.v) * 1.15) : 1.0;
-                                            var alignMult = 1.0 + 0.55 * cosAngle; // 1.55x прямо за курсом, 0.45x позаду
+                                            var alignMult = Math.max(0.75, 1.0 + 0.55 * cosAngle); // Не менше 0.75x, щоб не голодувати
                                             var weight = (f.type === 'near' ? 3.5 : 1.0) * valMult * alignMult;
                                             var effDist = dist * (dist + 35.0);
                                             var force = weight / effDist;
@@ -1174,7 +1174,7 @@ def _run_snake_bot_impl(max_runs=3, headless=False):
                                 var boostCandidate = Boolean(
                                     bestCluster &&
                                     bestCluster.mass >= 21 &&
-                                    minEnemyDist > 240 &&
+                                    minEnemyDist > 280 && // Підняли поріг з 240 до 280px для безпеки
                                     meMass >= minMassForBoost &&
                                     bestCluster.dist > 45 &&
                                     bestCluster.dist <= maxBoostDist &&
@@ -1270,8 +1270,8 @@ def _run_snake_bot_impl(max_runs=3, headless=False):
                                 stop_reason = None
                                 if time_boosting >= 0.45:
                                     stop_reason = "таймаут імпульсу 0.45с"
-                                elif min_enemy_dist < 200:
-                                    stop_reason = f"наближення ворога ({min_enemy_dist:.0f}px < 200px)"
+                                elif min_enemy_dist < 220:
+                                    stop_reason = f"наближення ворога ({min_enemy_dist:.0f}px < 220px)"
                                 elif dist_center > safe_radius:
                                     stop_reason = "наближення до стіни арени"
                                 elif me_mass < min_mass_for_boost:
