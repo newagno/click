@@ -1116,7 +1116,7 @@ def _run_snake_bot_impl(max_runs=3, headless=False):
                                 // 5. 3-фазний розподіл ваг та захист від розпаду (Decay Compensation з hysteresis)
                                 var phase = (window.__phase || 1);
                                 if (meMass < 350) phase = 1;
-                                else if (phase === 3 && meMass < 1400) phase = 2;
+                                else if (phase === 3 && meMass < 1200) phase = 2;
                                 else if (phase !== 3 && meMass >= 1600) phase = 3;
                                 else if (phase === 1 && meMass >= 400) phase = 2;
                                 window.__phase = phase;
@@ -1124,7 +1124,7 @@ def _run_snake_bot_impl(max_runs=3, headless=False):
                                 var foodWeight = 1.0;
                                 var clusterWeight = 2.0;
                                 if (phase === 3) {
-                                    foodWeight = 1.5;   // decay 11-26 mass/s -> компенсація активним живленням
+                                    foodWeight = 1.8;   // decay 11-26 mass/s -> компенсація активним живленням
                                     clusterWeight = 3.0;
                                 } else if (phase === 2) {
                                     foodWeight = 1.0;
