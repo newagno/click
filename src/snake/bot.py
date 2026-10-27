@@ -906,8 +906,14 @@ def _run_snake_bot_impl(max_runs=3, headless=False):
                 path_safe_steering_blocked_count = 0
                 core_fx_activations = 0
                 max_cluster_seen = 0.0
+                last_raycast_log_time = 0.0
+                raycast_panics_count = 0
+                last_telemetry = {}
 
                 # Забіг триває доти, доки змійка жива (або вичерпано час сесії)
+                last_phase = 1
+                last_mass_val = 0
+                last_mass_time = time.time()
                 while (time.time() - start_time) < max_duration:
                     if is_session_timeout(time.time() - session_start_time, is_ci):
                         print("[BOT] ⏰ 50 хв сесії вичерпано (watchdog), планове завершення поточного забігу.")
@@ -1122,6 +1128,7 @@ def _run_snake_bot_impl(max_runs=3, headless=False):
                                 var avoidFx = 0;
                                 var avoidFy = 0;
                                 var minEnemyDist = 9999;
+                                var nearestEnemy = null;
                                 for (var other of w.snakes.values()) {
                                     if (other.id === me.id || !other.alive) continue;
                                     if (other.guild === myGuild) continue; // friendlyFire: false
@@ -1137,6 +1144,13 @@ def _run_snake_bot_impl(max_runs=3, headless=False):
                                         // Голова меншого ворога (p === 0) при лобовому ударі гине сама, тому не блокує minEnemyDist
                                         if (!(p === 0 && isSmallerEnemy) && odist < minEnemyDist) {
                                             minEnemyDist = odist;
+                                            nearestEnemy = {
+                                                id: other.id,
+                                                name: other.name || ('Snake#' + other.id),
+                                                mass: Math.round(other.mass || 0),
+                                                dist: Math.round(odist),
+                                                is_head: (p === 0)
+                                            };
                                         }
 
                                         // Активне полювання (Head-Hunter): таранимо голову меншого ворога ТІЛЬКИ якщо він іде зустрічним курсом на нас (щоб не влетіти в його тулуб збоку)
@@ -1257,6 +1271,9 @@ def _run_snake_bot_impl(max_runs=3, headless=False):
 
                                 var primaryDanger = checkRaySafety(targetAngle);
                                 var headingDanger = checkRaySafety(currentHeading);
+                                var raycastPanicked = false;
+                                var raycastDeltaDeg = 0;
+                                var raycastDanger = primaryDanger;
                                 // Перехоплюємо кермо лише при близькій/середній небезпеці (primaryDanger >= 2)
                                 if (primaryDanger >= 2) {
                                     var candidateDeltas = [0, 0.35, -0.35, 0.7, -0.7, 1.1, -1.1, 1.6, -1.6, 2.3, -2.3];
@@ -1271,6 +1288,11 @@ def _run_snake_bot_impl(max_runs=3, headless=False):
                                             minCost = cost;
                                             safestAngle = testAngle;
                                         }
+                                    }
+                                    if (safestAngle !== targetAngle) {
+                                        raycastPanicked = true;
+                                        var diffRad = Math.atan2(Math.sin(safestAngle - targetAngle), Math.cos(safestAngle - targetAngle));
+                                        raycastDeltaDeg = Math.round(diffRad * 180 / Math.PI);
                                     }
                                     targetAngle = safestAngle;
                                 }
@@ -1310,6 +1332,7 @@ def _run_snake_bot_impl(max_runs=3, headless=False):
                                     food_weight: foodWeight,
                                     cluster_weight: clusterWeight,
                                     enemy_dist: minEnemyDist,
+                                    nearest_enemy: nearestEnemy,
                                     dist_center: distFromCenter,
                                     safe_radius: safeRadius,
                                     cluster_mass: bestCluster ? bestCluster.mass : 0,
@@ -1318,12 +1341,16 @@ def _run_snake_bot_impl(max_runs=3, headless=False):
                                     path_safe_blocked: pathSafeBlocked,
                                     path_safe_steering_blocked: pathSafeSteeringBlocked,
                                     core_fx_active: coreFxActive,
-                                    should_boost: shouldBoost
+                                    should_boost: shouldBoost,
+                                    raycast_panicked: raycastPanicked,
+                                    raycast_danger: raycastDanger,
+                                    raycast_delta_deg: raycastDeltaDeg
                                 };
                             })()
                         """)
 
                         if decision:
+                            me_mass = float(decision.get("mass") or 0)
                             val = decision.get("coins") or "0"
                             clean_score = "".join([c for c in str(val) if c.isdigit()])
                             if clean_score:
@@ -1332,9 +1359,33 @@ def _run_snake_bot_impl(max_runs=3, headless=False):
                             k_val = decision.get("kills") or "0"
                             clean_kills = "".join([c for c in str(k_val) if c.isdigit()])
                             if clean_kills:
-                                kills_earned = max(kills_earned, int(clean_kills))
+                                current_kills_int = int(clean_kills)
+                                if current_kills_int > kills_earned:
+                                    kill_delta = current_kills_int - kills_earned
+                                    kills_earned = current_kills_int
+                                    alive_t = int(time.time() - start_time)
+                                    print(f"[BOT] ⚔️ ВБИТО ЗМІЮ! Kills: {kills_earned} (+{kill_delta}) | Маса: {me_mass:.0f} | Монети: {score_earned} (Час: {alive_t}с)")
 
                             if decision.get("is_dead"):
+                                death_sec = int(time.time() - start_time)
+                                d_mass = last_telemetry.get("mass", me_mass)
+                                d_phase = last_telemetry.get("phase", 1)
+                                d_boost = " [під час BOOST]" if last_telemetry.get("boost_active") else ""
+                                d_enemy = last_telemetry.get("enemy")
+                                d_edist = last_telemetry.get("enemy_dist", 9999)
+                                d_center = last_telemetry.get("dist_center", 0)
+                                d_radius = last_telemetry.get("safe_radius", 1750)
+
+                                if d_enemy and d_enemy.get("dist", 9999) < 260:
+                                    enemy_desc = f"{d_enemy.get('name', 'Snake')} (маса {d_enemy.get('mass', 0):.0f}, dist ~{d_enemy.get('dist', 0)}px)"
+                                elif d_center > (d_radius - 30):
+                                    enemy_desc = f"Межа арени (відстань від центру {d_center:.0f}px / радіус {d_radius:.0f}px)"
+                                else:
+                                    enemy_desc = f"Ворог на дистанції {d_edist:.0f}px"
+
+                                print(f"\n[BOT] 💀 СМЕРТЬ ЗМІЙКИ на {death_sec}с/{max_duration}с{d_boost}!")
+                                print(f"      • Фаза: {d_phase} | Маса перед загибеллю: {d_mass:.0f} | Монети: {score_earned} | Kills: {kills_earned}")
+                                print(f"      • Обставини: {enemy_desc}")
                                 print(f"[BOT] Забіг завершено (зіткнення/кінець гри).")
                                 break
 
@@ -1358,7 +1409,6 @@ def _run_snake_bot_impl(max_runs=3, headless=False):
                                 })
 
                             # Опрацювання Boost (Turbo Vacuum)
-                            me_mass = float(decision.get("mass") or 0)
                             min_enemy_dist = float(decision.get("enemy_dist") or 9999)
                             dist_center = float(decision.get("dist_center") or 0)
                             safe_radius = float(decision.get("safe_radius") or 1750)
@@ -1368,6 +1418,28 @@ def _run_snake_bot_impl(max_runs=3, headless=False):
                             is_path_safe = bool(decision.get("is_path_safe", True))
                             path_safe_blocked = bool(decision.get("path_safe_blocked", False))
                             now = time.time()
+
+                            # Зберігаємо телеметрію живого стану для діагностики смерті
+                            last_telemetry = {
+                                "mass": me_mass,
+                                "phase": decision.get("phase", 1),
+                                "enemy": decision.get("nearest_enemy"),
+                                "enemy_dist": min_enemy_dist,
+                                "dist_center": dist_center,
+                                "safe_radius": safe_radius,
+                                "boost_active": boost_active
+                            }
+
+                            # Лог паніки Raycast (коли він різко відвертає від курсу їжі/кластера)
+                            raycast_panicked = bool(decision.get("raycast_panicked"))
+                            raycast_delta_deg = int(decision.get("raycast_delta_deg") or 0)
+                            raycast_danger = int(decision.get("raycast_danger") or 0)
+                            if raycast_panicked:
+                                raycast_panics_count += 1
+                                if (now - last_raycast_log_time >= 0.6) or abs(raycast_delta_deg) >= 60:
+                                    last_raycast_log_time = now
+                                    turn_dir = "вправо" if raycast_delta_deg > 0 else "вліво"
+                                    print(f"[BOT] ⚠️ Raycast Evade! Небезпека lv.{raycast_danger} (ворог {min_enemy_dist:.0f}px), різкий маневр {turn_dir} на {abs(raycast_delta_deg)}° від курсу (маса {me_mass:.0f})")
 
                             if path_safe_blocked and (now >= boost_cooldown_until):
                                 path_safe_blocked_count += 1
@@ -1395,6 +1467,12 @@ def _run_snake_bot_impl(max_runs=3, headless=False):
                                     stop_reason = "кластер зібрано / ціль зникла"
 
                                 if stop_reason:
+                                    mass_diff = me_mass - boost_start_mass
+                                    if mass_diff > 0:
+                                        print(f"[BOT] 💰 BOOST ОКУПИВСЯ: +{mass_diff:.0f} маси (імпульс {time_boosting:.2f}с)")
+                                    else:
+                                        print(f"[BOT] 📉 BOOST В МІНУС: {mass_diff:.0f} маси (імпульс {time_boosting:.2f}с)")
+                                    
                                     if not DRY_RUN:
                                         try:
                                             sb.driver.execute_cdp_cmd("Input.dispatchKeyEvent", {
@@ -1449,6 +1527,21 @@ def _run_snake_bot_impl(max_runs=3, headless=False):
 
                     ticks += 1
                     phase_val = decision.get("phase", 1) if decision else 1
+                    
+                    if phase_val != last_phase:
+                        print(f"[BOT] 📈 Фаза змінена: {last_phase} ➔ {phase_val} (маса: {me_mass:.0f})")
+                        last_phase = phase_val
+                    
+                    if cluster_mass > 80 and cluster_dist > 400 and cluster_mass > max_cluster_seen:
+                        print(f"[BOT] 🥩 МЕГА-КЛАСТЕР: {cluster_mass:.0f} маси на {cluster_dist:.0f}px (Ворог: {min_enemy_dist:.0f}px)")
+                        max_cluster_seen = cluster_mass
+                        
+                    if time.time() - last_mass_time > 10:
+                        mass_loss = last_mass_val - me_mass
+                        if mass_loss > 100 and last_mass_val > 0:
+                            print(f"[BOT] ⏳ ГОЛОДУВАННЯ: спад маси {last_mass_val:.0f} ➔ {me_mass:.0f} за 10с (-{mass_loss/10:.1f} mass/s)")
+                        last_mass_val = me_mass
+                        last_mass_time = time.time()
                     avoid_r_val = decision.get("avoid_radius", 220.0) if decision else 220.0
                     food_w_val = decision.get("food_weight", 1.0) if decision else 1.0
                     cluster_w_val = decision.get("cluster_weight", 2.0) if decision else 2.0
@@ -1482,7 +1575,7 @@ def _run_snake_bot_impl(max_runs=3, headless=False):
 
                 duration_sec = int(time.time() - start_time)
                 print(f"[BOT] Забіг #{run_idx} тривав {duration_sec} сек.")
-                print(f"      Очки: +{score_earned} | З'їдено змій: {kills_earned} | Активацій boost: {boost_triggers_count} | isPathSafe блоковано (boost/steering): {path_safe_blocked_count}/{path_safe_steering_blocked_count} | coreFx активностей: {core_fx_activations} | Макс. кластер: {max_cluster_seen:.0f}")
+                print(f"      Очки: +{score_earned} | З'їдено змій: {kills_earned} | Активацій boost: {boost_triggers_count} | Raycast ухилень: {raycast_panics_count} | isPathSafe блоковано (boost/steering): {path_safe_blocked_count}/{path_safe_steering_blocked_count} | coreFx активностей: {core_fx_activations} | Макс. кластер: {max_cluster_seen:.0f}")
 
                 # 8. Пауза 6 секунд, щоб екран смерті #cs-dead та сервер повністю синхронізувалися
                 print("[BOT] Очікуємо синхронізацію результату із сервером (6 сек)...")
