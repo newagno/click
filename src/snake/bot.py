@@ -1129,6 +1129,7 @@ def _run_snake_bot_impl(max_runs=3, headless=False):
                                 var avoidFy = 0;
                                 var minEnemyDist = 9999;
                                 var nearestEnemy = null;
+                                var huntedEnemyId = null;
                                 for (var other of w.snakes.values()) {
                                     if (other.id === me.id || !other.alive) continue;
                                     if (other.guild === myGuild) continue; // friendlyFire: false
@@ -1153,18 +1154,19 @@ def _run_snake_bot_impl(max_runs=3, headless=False):
                                             };
                                         }
 
-                                        // Активне полювання (Head-Hunter): таранимо голову меншого ворога ТІЛЬКИ якщо він іде зустрічним курсом на нас (щоб не влетіти в його тулуб збоку)
+                                        // Активне полювання (Head-Hunter): таранимо голову меншого ворога ТІЛЬКИ якщо він іде строго зустрічним курсом на нас
                                         if (p === 0 && isSmallerEnemy && (other.mass || 0) >= 60 && meMass >= 500 && odist < 115 && odist > 15 && other.pts.length >= 4) {
                                             var toEnemyCos = ((ox - hx) / odist) * headingX + ((oy - hy) / odist) * headingY;
                                             var eHx = ox - other.pts[2];
                                             var eHy = oy - other.pts[3];
                                             var eNorm = Math.hypot(eHx, eHy) || 1.0;
                                             var enemyApproachingCos = ((hx - ox) / odist) * (eHx / eNorm) + ((hy - oy) / odist) * (eHy / eNorm);
-                                            if (toEnemyCos > 0.65 && enemyApproachingCos > 0.4) {
-                                                var huntForce = 38.0 / (odist * (odist + 25.0));
+                                            if (toEnemyCos > 0.72 && enemyApproachingCos > 0.55) {
+                                                var huntForce = 120.0 / (odist * (odist + 20.0));
                                                 foodFx += ((ox - hx) / odist) * huntForce;
                                                 foodFy += ((oy - hy) / odist) * huntForce;
-                                                continue;
+                                                huntedEnemyId = other.id;
+                                                break;
                                             }
                                         }
 
@@ -1247,7 +1249,7 @@ def _run_snake_bot_impl(max_runs=3, headless=False):
                                         if (px * px + py * py > maxRSq) return danger;
 
                                         for (var other of w.snakes.values()) {
-                                            if (other.id === me.id || !other.alive) continue;
+                                            if (other.id === me.id || other.id === huntedEnemyId || !other.alive) continue;
                                             if (other.guild === myGuild) continue;
                                             if ((other.shield || 0) > 0.6) continue;
                                             if (!other.pts || other.pts.length < 2) continue;
@@ -1315,7 +1317,8 @@ def _run_snake_bot_impl(max_runs=3, headless=False):
                                     meMass >= minMassForBoost &&
                                     bestCluster.dist > 45 &&
                                     bestCluster.dist <= maxBoostDist &&
-                                    distFromCenter < (safeRadius - 100)
+                                    distFromCenter < (safeRadius - 100) &&
+                                    !(bestCluster.mass > 150 && minEnemyDist < 280)
                                 );
                                 var shouldBoost = boostCandidate && isPathSafe;
                                 var pathSafeBlocked = boostCandidate && !isPathSafe;
@@ -1590,8 +1593,9 @@ def _run_snake_bot_impl(max_runs=3, headless=False):
                         var deadRank  = document.querySelector('#cs-d-rank')?.innerText;
 
                         // Рекорд сезону (#1 podium)
-                        var topPtsEl = document.querySelector('#cs-podium .cs-pod[data-p="1"] .cs-pod-pts');
-                        var seasonRecord = topPtsEl ? (parseInt(topPtsEl.innerText.replace(/\\D/g, '')) || 48670) : 48670;
+                        var topPtsEl = document.querySelector('#cs-podium .cs-pod[data-p="1"] .cs-pod-pts') || document.querySelector('.cs-pod-pts');
+                        var seasonRecord = topPtsEl ? parseInt(topPtsEl.innerText.replace(/[^0-9]/g, '')) : 0;
+                        if (!seasonRecord) seasonRecord = 48670;
 
                         // Список гільдій
                         var guildEls = Array.from(document.querySelectorAll('.cs-g'));
@@ -1666,7 +1670,9 @@ def _run_snake_bot_impl(max_runs=3, headless=False):
                     kills_earned = int("".join(c for c in str(final_kills) if c.isdigit()))
 
                 nick = stats.get("nick", "newagno")
-                season_record = stats.get("season_record", 48670)
+                season_record = stats.get("season_record") or 48670
+                if season_record < score_earned:
+                    season_record = score_earned
                 delta_record = season_record - score_earned
                 if delta_record <= 0:
                     rec_line = f"🏆 <b>НОВИЙ РЕКОРД СЕЗОНУ!</b> Перевершено топ-1 на +{abs(delta_record):,} монет!"
@@ -1697,9 +1703,9 @@ def _run_snake_bot_impl(max_runs=3, headless=False):
                 if season_rank_num:
                     rank_str = f"#{season_rank_num} (сезон)"
                 elif round_rank_num:
-                    rank_str = f"#{round_rank_num} (цей забіг, поза топ-20 сезону)"
+                    rank_str = f"Поза топ-20 сезону (місце в забігу: #{round_rank_num})"
                 else:
-                    rank_str = "поза топ-20 сезону"
+                    rank_str = "Поза топ-20 сезону"
 
                 # 10. Формуємо детальний звіт у Telegram
                 tg_message = format_snake_tg_report(
