@@ -21,9 +21,9 @@ on:
           - '0'
           - '1'
       max_duration:
-        description: 'Тривалість забігу в секундах (600 = 10хв тест, 3000 = 50хв production)'
+        description: 'Тривалість забігу в секундах (600 = 10хв тест, 5400 = 90хв production)'
         required: false
-        default: '3000'
+        default: '5400'
         type: string
 
 # Ensure only one snake session runs at a time
@@ -99,7 +99,7 @@ jobs:
           RESIDENTIAL_PROXY: ${{ secrets.RESIDENTIAL_PROXY || secrets.PROXY }}
           BACKUP_PROXY: ${{ secrets.BACKUP_PROXY || secrets.SECONDARY_PROXY }}
           DRY_RUN: ${{ github.event.inputs.dry_run || '0' }}
-          MAX_DURATION: ${{ github.event.inputs.max_duration || '3000' }}
+          MAX_DURATION: ${{ github.event.inputs.max_duration || '5400' }}
         run: |
           RUNS_COUNT="${{ github.event.inputs.runs || '1' }}"
           echo "[*] MAX_DURATION=$MAX_DURATION (input: ${{ github.event.inputs.max_duration || 'default' }})"

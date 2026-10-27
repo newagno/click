@@ -369,7 +369,7 @@ PATH_SAFE_CONE_RAD = math.radians(PATH_SAFE_CONE_DEG)
 
 def is_session_timeout(elapsed: float, is_ci: bool) -> bool:
     """Hard watchdog check for runs (cutoff at limit + 60s buffer for sync/reporting)."""
-    limit = 3100 if is_ci else 3300
+    limit = 5500 if is_ci else 5800
     return elapsed >= (limit + 60)
 
 
@@ -884,7 +884,7 @@ def _run_snake_bot_impl(max_runs=3, headless=False):
                     max_duration = int(os.getenv("MAX_DURATION", "180"))
                     print(f"[BOT] 🧪 УВІМКНЕНО DRY_RUN ({max_duration}с тест). CDP Space імітується, вимірюємо кластери та запобіжники.")
                 else:
-                    default_duration = 3000 if os.getenv("GITHUB_ACTIONS") else 3200
+                    default_duration = 5400 if os.getenv("GITHUB_ACTIONS") else 5600
                     max_duration = int(os.getenv("MAX_DURATION", default_duration))
                     print(f"[BOT] Змійка на полі! Марафон на {max_duration // 60} хв: Turbo Vacuum (Space) + Smart Predator + Dynamic Walls...")
 
@@ -995,6 +995,8 @@ def _run_snake_bot_impl(max_runs=3, headless=False):
                                         if (dist <= 680) {
                                             var valMult = (f.natural === false && f.v) ? Math.min(2.5, Math.sqrt(f.v) * 1.15) : 1.0;
                                             var alignMult = Math.max(0.65, 1.0 + 0.55 * cosAngle);
+                                            // Попутний пилосос (Transit Grazing): не пропускаємо близькі монети прямо за курсом під час польоту до кластера
+                                            if (dist < 130 && cosAngle > 0.75) alignMult *= 2.1;
                                             var guildWeight = isMyGuildCoin ? 3.8 : 1.0;
                                             var effDist = dist * (dist + 35.0);
                                             var force = (guildWeight * valMult * alignMult) / effDist;
@@ -1002,15 +1004,15 @@ def _run_snake_bot_impl(max_runs=3, headless=False):
                                             foodFy += uy * force;
                                         }
 
-                                        // Трупні монети живуть 75с; монети своєї гільдії дають x2 маси та очок (ownCoinMultiplier: 2)
-                                        if (f.natural === false && dist <= 640) {
-                                            var effectiveVal = (f.v || 1) * (isMyGuildCoin ? 2.0 : 1.0);
+                                        // Скануємо трупи до 950px (далі 950px втрати на decay перевищують вигоду)
+                                        if (f.natural === false && dist <= 950) {
+                                            var effectiveVal = (f.v || 1) * (isMyGuildCoin ? 2.2 : 1.0);
                                             drops.push({ x: f.x, y: f.y, v: effectiveVal, dist: dist });
                                         }
                                     }
                                 }
 
-                                // 2. Кластеризація дропів за відстанню (радіус суміжності 50px)
+                                // 2. Ланцюгова BFS-кластеризація дропів (радіус зв'язності 65px об'єднує всю тушу змії)
                                 var clusterFx = 0;
                                 var clusterFy = 0;
                                 var bestCluster = null;
@@ -1019,31 +1021,49 @@ def _run_snake_bot_impl(max_runs=3, headless=False):
                                     var visited = new Uint8Array(drops.length);
                                     for (var i = 0; i < drops.length; i++) {
                                         if (visited[i]) continue;
-                                        var cMass = drops[i].v;
-                                        var cCount = 1;
-                                        var sumX = drops[i].x * drops[i].v;
-                                        var sumY = drops[i].y * drops[i].v;
                                         visited[i] = 1;
+                                        var queue = [i];
+                                        var cMass = 0;
+                                        var cCount = 0;
+                                        var sumX = 0;
+                                        var sumY = 0;
+                                        var minDropDist = 9999;
+                                        var nearestX = drops[i].x;
+                                        var nearestY = drops[i].y;
 
-                                        for (var j = i + 1; j < drops.length; j++) {
-                                            if (visited[j]) continue;
-                                            var ddx = drops[i].x - drops[j].x;
-                                            var ddy = drops[i].y - drops[j].y;
-                                            if (ddx * ddx + ddy * ddy < 2500) { // відстань < 50px
-                                                visited[j] = 1;
-                                                cMass += drops[j].v;
-                                                cCount += 1;
-                                                sumX += drops[j].x * drops[j].v;
-                                                sumY += drops[j].y * drops[j].v;
+                                        while (queue.length > 0) {
+                                            var curr = queue.pop();
+                                            var dItem = drops[curr];
+                                            cMass += dItem.v;
+                                            cCount += 1;
+                                            sumX += dItem.x * dItem.v;
+                                            sumY += dItem.y * dItem.v;
+                                            if (dItem.dist < minDropDist) {
+                                                minDropDist = dItem.dist;
+                                                nearestX = dItem.x;
+                                                nearestY = dItem.y;
+                                            }
+                                            for (var j = 0; j < drops.length; j++) {
+                                                if (visited[j]) continue;
+                                                var ddx = dItem.x - drops[j].x;
+                                                var ddy = dItem.y - drops[j].y;
+                                                if (ddx * ddx + ddy * ddy <= 4225) { // 65px ланцюгова зв'язність
+                                                    visited[j] = 1;
+                                                    queue.push(j);
+                                                }
                                             }
                                         }
 
-                                        // Поріг окупності: cluster.mass >= 21 (в 3 рази більше за boostCost: 7)
                                         if (cMass >= 21) {
-                                            var cx_drop = sumX / cMass;
-                                            var cy_drop = sumY / cMass;
+                                            var cx_drop = 0.65 * (sumX / cMass) + 0.35 * nearestX;
+                                            var cy_drop = 0.65 * (sumY / cMass) + 0.35 * nearestY;
                                             var cDist = Math.hypot(cx_drop - hx, cy_drop - hy);
-                                            var cScore = cMass / Math.max(20, cDist);
+                                            // Не летимо далі 550px за дрібними кластерами (< 55 маси), щоб не втрачати масу на decay
+                                            if (cDist > 550 && cMass < 55) continue;
+                                            var cAngle = Math.atan2(cy_drop - hy, cx_drop - hx);
+                                            var cCos = Math.cos(cAngle - currentHeading);
+                                            var dirBonus = 1.0 + 0.35 * cCos;
+                                            var cScore = (Math.pow(cMass, 1.15) * dirBonus) / Math.max(45, Math.pow(cDist, 0.85));
                                             if (!bestCluster || cScore > (bestCluster.score || 0)) {
                                                 bestCluster = {
                                                     mass: cMass,
@@ -1058,21 +1078,24 @@ def _run_snake_bot_impl(max_runs=3, headless=False):
                                     }
                                 }
 
-                                // Перевірка безпеки коридору до кластера (isPathSafe: відсутність ворогів у конусі ±30°)
+                                // Перевірка безпеки коридору до кластера на 560px вперед (дає >1.1с реакції при зустрічному бусті 510px/s)
                                 var isPathSafe = true;
                                 if (bestCluster) {
                                     var pathAngle = Math.atan2(bestCluster.y - hy, bestCluster.x - hx);
                                     for (var other of w.snakes.values()) {
                                         if (other.id === me.id || !other.alive || other.guild === myGuild) continue;
+                                        if ((other.shield || 0) > 0.6) continue;
                                         if (!other.pts || other.pts.length < 2) continue;
+                                        var isSmaller = (other.mass || 0) < meMass * 0.82;
+                                        var startIdx = isSmaller ? 6 : 0;
                                         var step = other.pts.length > 40 ? 4 : 2;
-                                        for (var p = 0; p < other.pts.length; p += step) {
+                                        for (var p = startIdx; p < other.pts.length; p += step) {
                                             var ox = other.pts[p], oy = other.pts[p + 1];
                                             var enemyDist = Math.hypot(ox - hx, oy - hy);
-                                            if (enemyDist > bestCluster.dist) continue;
+                                            if (enemyDist > Math.min(bestCluster.dist, 560)) continue;
                                             var enemyAngle = Math.atan2(oy - hy, ox - hx);
-                                            var angleDiff = Math.abs(((enemyAngle - pathAngle + Math.PI) % (2 * Math.PI)) - Math.PI);
-                                            if (angleDiff < Math.PI / 6) { // ±30° cone
+                                            var angleDiff = Math.abs(Math.atan2(Math.sin(enemyAngle - pathAngle), Math.cos(enemyAngle - pathAngle)));
+                                            if (angleDiff < 0.48) {
                                                 isPathSafe = false;
                                                 break;
                                             }
@@ -1082,14 +1105,14 @@ def _run_snake_bot_impl(max_runs=3, headless=False):
                                 }
 
                                 var pathSafeSteeringBlocked = Boolean(bestCluster && bestCluster.dist > 1 && !isPathSafe);
-                                // Блокуємо кермо тільки для великої змійки (Фаза 2+), щоб не голодувати на старті
                                 var blockSteeringOnUnsafe = Boolean(window.__blockSteeringOnUnsafe) && meMass > 400;
 
-                                // Притягання до кластера (діє на дистанції > 55px; ближче 55px веде точний foodFx по монетах)
-                                if (bestCluster && bestCluster.dist > 55 && (!blockSteeringOnUnsafe || isPathSafe)) {
+                                // Далекобійний магніт: якщо коридор перекритий ворогом (!isPathSafe), гасимо тягу до 0.28x, щоб плавно обійти ворога
+                                if (bestCluster && bestCluster.dist > 50 && (!blockSteeringOnUnsafe || isPathSafe)) {
                                     var cDist = bestCluster.dist;
-                                    var cappedMass = Math.min(bestCluster.mass, 65);
-                                    var cForce = (cappedMass / (cDist * cDist)) * 0.75;
+                                    var cappedMass = Math.min(bestCluster.mass, 260);
+                                    var safetyDamp = isPathSafe ? 1.35 : 0.28;
+                                    var cForce = (cappedMass / (cDist * (120.0 + 0.35 * cDist))) * safetyDamp;
                                     clusterFx = ((bestCluster.x - hx) / cDist) * cForce;
                                     clusterFy = ((bestCluster.y - hy) / cDist) * cForce;
                                 }
@@ -1116,8 +1139,23 @@ def _run_snake_bot_impl(max_runs=3, headless=False):
                                             minEnemyDist = odist;
                                         }
 
+                                        // Активне полювання (Head-Hunter): таранимо голову меншого ворога ТІЛЬКИ якщо він іде зустрічним курсом на нас (щоб не влетіти в його тулуб збоку)
+                                        if (p === 0 && isSmallerEnemy && (other.mass || 0) >= 60 && meMass >= 500 && odist < 115 && odist > 15 && other.pts.length >= 4) {
+                                            var toEnemyCos = ((ox - hx) / odist) * headingX + ((oy - hy) / odist) * headingY;
+                                            var eHx = ox - other.pts[2];
+                                            var eHy = oy - other.pts[3];
+                                            var eNorm = Math.hypot(eHx, eHy) || 1.0;
+                                            var enemyApproachingCos = ((hx - ox) / odist) * (eHx / eNorm) + ((hy - oy) / odist) * (eHy / eNorm);
+                                            if (toEnemyCos > 0.65 && enemyApproachingCos > 0.4) {
+                                                var huntForce = 38.0 / (odist * (odist + 25.0));
+                                                foodFx += ((ox - hx) / odist) * huntForce;
+                                                foodFy += ((oy - hy) / odist) * huntForce;
+                                                continue;
+                                            }
+                                        }
+
                                         if (odist < avoidRadius && odist > 1) {
-                                            var headMultiplier = (p === 0) ? (isSmallerEnemy ? 0.35 : 2.5) : 1.0;
+                                            var headMultiplier = (p === 0) ? (isSmallerEnemy ? 0.2 : 2.5) : 1.0;
                                             var repForce = (90.0 * headMultiplier) / (odist * odist);
                                             avoidFx += ((hx - ox) / odist) * repForce;
                                             avoidFy += ((hy - oy) / odist) * repForce;
@@ -1180,7 +1218,13 @@ def _run_snake_bot_impl(max_runs=3, headless=False):
                                 var checkRaySafety = function(angle) {
                                     var maxR = arenaRadius - 1.5 * meR;
                                     var maxRSq = maxR * maxR;
-                                    var rayDists = [meR + 12, 2.2 * meR + 25, 3.4 * meR + 50, 4.6 * meR + 85];
+                                    var speedMult = me.boost ? 1.35 : 1.0;
+                                    var rayDists = [
+                                        (meR + 12) * speedMult,
+                                        (2.2 * meR + 25) * speedMult,
+                                        (3.4 * meR + 50) * speedMult,
+                                        (4.6 * meR + 85) * speedMult
+                                    ];
                                     for (var i = 0; i < rayDists.length; i++) {
                                         var d = rayDists[i];
                                         var px = hx + Math.cos(angle) * d;
@@ -1239,7 +1283,7 @@ def _run_snake_bot_impl(max_runs=3, headless=False):
                                 // - Відстань до кластера > 40px (ще не досягли)
                                 // - Безпечна відстань від краю арени
                                 var minMassForBoost = window.__minMassForBoost || 350;
-                                var maxBoostDist = (bestCluster && bestCluster.mass >= 40) ? 450 : 300;
+                                var maxBoostDist = (bestCluster && bestCluster.mass >= 90) ? 750 : ((bestCluster && bestCluster.mass >= 40) ? 480 : 300);
                                 var boostCandidate = Boolean(
                                     bestCluster &&
                                     bestCluster.mass >= 21 &&
