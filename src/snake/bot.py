@@ -1093,7 +1093,7 @@ def _run_snake_bot_impl(max_runs=3, headless=False):
                                         if ((other.shield || 0) > 0.6) continue;
                                         if (!other.pts || other.pts.length < 2) continue;
                                         var isSmaller = (other.mass || 0) < meMass * 0.82;
-                                        var startIdx = (isSmaller && meMass < 1100) ? 6 : 0;
+                                        var startIdx = (isSmaller && meMass < 1850) ? 6 : 0;
                                         var step = other.pts.length > 40 ? 4 : 2;
                                         for (var p = startIdx; p < other.pts.length; p += step) {
                                             var ox = other.pts[p], oy = other.pts[p + 1];
@@ -1113,8 +1113,8 @@ def _run_snake_bot_impl(max_runs=3, headless=False):
                                 var pathSafeSteeringBlocked = Boolean(bestCluster && bestCluster.dist > 1 && !isPathSafe);
                                 var blockSteeringOnUnsafe = Boolean(window.__blockSteeringOnUnsafe) && meMass > 400;
 
-                                // 3. Ухилення від ворожих змій з динамічною зоною безпеки за масою (200-240px)
-                                var avoidRadius = Math.max(200, Math.min(340, 180 + meMass * 0.07));
+                                // 3. Ухилення від ворожих змій з динамічною зоною безпеки за масою (200-255px)
+                                var avoidRadius = Math.max(200, Math.min(255, 180 + meMass * 0.04));
                                 var avoidFx = 0;
                                 var avoidFy = 0;
                                 var minEnemyDist = 9999;
@@ -1133,7 +1133,7 @@ def _run_snake_bot_impl(max_runs=3, headless=False):
                                         var odist = Math.hypot(hx - ox, hy - oy);
 
                                         // Голова меншого ворога (p === 0) при лобовому ударі гине сама, тому не блокує minEnemyDist
-                                        if (!(p === 0 && isSmallerEnemy && meMass < 1100) && odist < minEnemyDist) {
+                                        if (!(p === 0 && isSmallerEnemy && meMass < 1850) && odist < minEnemyDist) {
                                             minEnemyDist = odist;
                                             nearestEnemy = {
                                                 id: other.id,
@@ -1160,7 +1160,7 @@ def _run_snake_bot_impl(max_runs=3, headless=False):
                                         }
 
                                         if (odist < avoidRadius && odist > 1) {
-                                            var headMultiplier = (p === 0) ? (isSmallerEnemy ? (meMass >= 1100 ? 1.2 : 0.2) : 2.5) : 1.0;
+                                            var headMultiplier = (p === 0) ? (isSmallerEnemy ? (meMass >= 1850 ? 0.75 : 0.25) : 2.5) : 1.0;
                                             var repForce = (95.0 * headMultiplier) / (odist * odist);
                                             avoidFx += ((hx - ox) / odist) * repForce;
                                             avoidFy += ((hy - oy) / odist) * repForce;
@@ -1168,11 +1168,11 @@ def _run_snake_bot_impl(max_runs=3, headless=False):
                                     }
                                 }
 
-                                // Далекобійний магніт: якщо коридор перекритий ворогом (!isPathSafe), гасимо тягу до 0.28x, щоб плавно обійти ворога
+                                // Далекобійний магніт: не блокуємо кластери >100 маси, коли isPathSafe === true
                                 if (bestCluster && bestCluster.dist > 50 && (!blockSteeringOnUnsafe || isPathSafe)) {
                                     var cDist = bestCluster.dist;
                                     var cappedMass = Math.min(bestCluster.mass, 260);
-                                    var safetyDamp = (isPathSafe && (bestCluster.mass <= 100 || minEnemyDist >= 320)) ? 1.35 : 0.25;
+                                    var safetyDamp = isPathSafe ? (minEnemyDist < 195 ? 0.65 : 1.35) : 0.32;
                                     var cForce = (cappedMass / (cDist * (120.0 + 0.35 * cDist))) * safetyDamp;
                                     clusterFx = ((bestCluster.x - hx) / cDist) * cForce;
                                     clusterFy = ((bestCluster.y - hy) / cDist) * cForce;
@@ -1242,48 +1242,59 @@ def _run_snake_bot_impl(max_runs=3, headless=False):
                                     ];
                                     for (var i = 0; i < rayDists.length; i++) {
                                         var d = rayDists[i];
-                                        var px = hx + Math.cos(angle) * d;
-                                        var py = hy + Math.sin(angle) * d;
                                         var danger = rayDists.length - i; // 4=впритул, 3=близько, 2=середньо, 1=далеко
-                                        if (px * px + py * py > maxRSq) return danger;
+                                        var spread = (i <= 1) ? [-0.28, 0, 0.28] : [0];
+                                        for (var sIdx = 0; sIdx < spread.length; sIdx++) {
+                                            var a = angle + spread[sIdx];
+                                            var px = hx + Math.cos(a) * d;
+                                            var py = hy + Math.sin(a) * d;
+                                            if (px * px + py * py > maxRSq) return danger;
 
-                                        for (var other of w.snakes.values()) {
-                                            if (other.id === me.id || !other.alive) continue;
-                                            if (other.guild === myGuild) continue;
-                                            if ((other.shield || 0) > 0.6) continue;
-                                            if (!other.pts || other.pts.length < 2) continue;
+                                            for (var other of w.snakes.values()) {
+                                                if (other.id === me.id || !other.alive) continue;
+                                                if (other.guild === myGuild) continue;
+                                                if ((other.shield || 0) > 0.6) continue;
+                                                if (!other.pts || other.pts.length < 2) continue;
 
-                                            var otherR = other.r || 16;
-                                            var hitDist = otherR + meR + 6;
-                                            var hitDistSq = hitDist * hitDist;
-                                            var isSmaller = (other.mass || 0) < meMass * 0.85;
-                                            var startP = (other.id === huntedEnemyId || (isSmaller && meMass < 1100 && !other.shield)) ? 6 : 0;
+                                                var otherR = other.r || 16;
+                                                var hitDist = otherR + meR + (spread[sIdx] === 0 ? 8 : 4);
+                                                var hitDistSq = hitDist * hitDist;
+                                                var isSmaller = (other.mass || 0) < meMass * 0.85;
+                                                var startP = (other.id === huntedEnemyId || (isSmaller && meMass < 1850 && !other.shield)) ? 6 : 0;
 
-                                            for (var p = startP; p < other.pts.length; p += 2) {
-                                                var sx = other.pts[p] - px;
-                                                var sy = other.pts[p + 1] - py;
-                                                if (sx * sx + sy * sy < hitDistSq) return danger;
+                                                for (var p = startP; p < other.pts.length; p += 2) {
+                                                    var sx = other.pts[p] - px;
+                                                    var sy = other.pts[p + 1] - py;
+                                                    if (sx * sx + sy * sy < hitDistSq) return danger;
+                                                }
                                             }
                                         }
                                     }
                                     return 0;
                                 };
 
+                                var nowMs = Date.now();
+                                if (window.__evadeLockUntil && nowMs < window.__evadeLockUntil && window.__evadeLockAngle !== undefined) {
+                                    if (checkRaySafety(window.__evadeLockAngle) <= 1) {
+                                        targetAngle = window.__evadeLockAngle;
+                                    }
+                                }
+
                                 var primaryDanger = checkRaySafety(targetAngle);
                                 var headingDanger = checkRaySafety(currentHeading);
                                 var raycastPanicked = false;
                                 var raycastDeltaDeg = 0;
-                                var raycastDanger = primaryDanger;
-                                // Перехоплюємо кермо лише при близькій/середній небезпеці (primaryDanger >= 2)
+                                var raycastDanger = Math.max(primaryDanger, headingDanger);
+                                // Перехоплюємо кермо, коли обраний курс небезпечний (primaryDanger >= 2)
                                 if (primaryDanger >= 2) {
-                                    var candidateDeltas = [0, 0.35, -0.35, 0.7, -0.7, 1.1, -1.1, 1.6, -1.6, 2.3, -2.3];
+                                    var candidateDeltas = [0, 0.28, -0.28, 0.55, -0.55, 0.78, -0.78, 1.05, -1.05, 1.35, -1.35];
                                     var minCost = 999999;
                                     var safestAngle = targetAngle;
                                     for (var delta of candidateDeltas) {
                                         var testAngle = currentHeading + delta;
                                         var dScore = checkRaySafety(testAngle);
                                         var angleDiff = Math.abs(Math.atan2(Math.sin(testAngle - targetAngle), Math.cos(testAngle - targetAngle)));
-                                        var cost = 5.0 * dScore + angleDiff;
+                                        var cost = 6.0 * dScore + angleDiff + 0.35 * Math.abs(delta);
                                         if (cost < minCost) {
                                             minCost = cost;
                                             safestAngle = testAngle;
@@ -1291,8 +1302,13 @@ def _run_snake_bot_impl(max_runs=3, headless=False):
                                     }
                                     if (safestAngle !== targetAngle) {
                                         raycastPanicked = true;
-                                        var diffRad = Math.atan2(Math.sin(safestAngle - targetAngle), Math.cos(safestAngle - targetAngle));
-                                        raycastDeltaDeg = Math.round(diffRad * 180 / Math.PI);
+                                        var rawDiff = Math.atan2(Math.sin(safestAngle - currentHeading), Math.cos(safestAngle - currentHeading));
+                                        // Обмежуємо разовий імпульс повороту до ±0.78 рад (±45°), щоб уникнути самозаносу
+                                        var clampedDiff = Math.max(-0.78, Math.min(0.78, rawDiff));
+                                        safestAngle = currentHeading + clampedDiff;
+                                        raycastDeltaDeg = Math.round(clampedDiff * 180 / Math.PI);
+                                        window.__evadeLockAngle = safestAngle;
+                                        window.__evadeLockUntil = nowMs + 360;
                                     }
                                     targetAngle = safestAngle;
                                 }
@@ -1305,20 +1321,22 @@ def _run_snake_bot_impl(max_runs=3, headless=False):
                                 // - Відстань до кластера > 40px (ще не досягли)
                                 // - Безпечна відстань від краю арени
                                 var minMassForBoost = window.__minMassForBoost || 350;
-                                var minClusterForBoost = (meMass >= 1400) ? 90 : ((meMass >= 800) ? 45 : 21);
-                                var safeEnemyDistForBoost = Math.max(230, Math.min(360, 190 + meMass * 0.075));
-                                var maxBoostDist = (bestCluster && bestCluster.mass >= 120) ? (meMass >= 1400 ? 520 : 700) : ((bestCluster && bestCluster.mass >= 50) ? 420 : 280);
+                                // Soft-cap маси: при meMass >= 1750 бустимо лише в гігантські кластери (>= 220) впритул (<= 260px), щоб не годувати decay
+                                var minClusterForBoost = (meMass >= 1750) ? 220 : ((meMass >= 1200) ? 85 : ((meMass >= 700) ? 45 : 25));
+                                var safeEnemyDistForBoost = Math.max(230, Math.min(290, 190 + meMass * 0.045));
+                                var maxBoostDist = (meMass >= 1750) ? 260 : ((bestCluster && bestCluster.mass >= 120) ? 350 : 250);
+                                var clusterAlignCos = bestCluster ? Math.cos(Math.atan2(bestCluster.y - hy, bestCluster.x - hx) - currentHeading) : -1.0;
                                 var boostCandidate = Boolean(
                                     bestCluster &&
                                     bestCluster.mass >= minClusterForBoost &&
+                                    clusterAlignCos > 0.82 &&
                                     primaryDanger === 0 &&
                                     headingDanger === 0 &&
                                     minEnemyDist > safeEnemyDistForBoost &&
                                     meMass >= minMassForBoost &&
                                     bestCluster.dist > 55 &&
                                     bestCluster.dist <= maxBoostDist &&
-                                    distFromCenter < (safeRadius - 120) &&
-                                    !(bestCluster.mass > 120 && minEnemyDist < 340)
+                                    distFromCenter < (safeRadius - 120)
                                 );
                                 var shouldBoost = boostCandidate && isPathSafe;
                                 var pathSafeBlocked = boostCandidate && !isPathSafe;
@@ -1439,7 +1457,7 @@ def _run_snake_bot_impl(max_runs=3, headless=False):
                             raycast_danger = int(decision.get("raycast_danger") or 0)
                             if raycast_panicked:
                                 raycast_panics_count += 1
-                                if (now - last_raycast_log_time >= 0.6) or abs(raycast_delta_deg) >= 60:
+                                if now - last_raycast_log_time >= 0.4:
                                     last_raycast_log_time = now
                                     turn_dir = "вправо" if raycast_delta_deg > 0 else "вліво"
                                     print(f"[BOT] ⚠️ Raycast Evade! Небезпека lv.{raycast_danger} (ворог {min_enemy_dist:.0f}px), різкий маневр {turn_dir} на {abs(raycast_delta_deg)}° від курсу (маса {me_mass:.0f})")
@@ -1458,15 +1476,15 @@ def _run_snake_bot_impl(max_runs=3, headless=False):
                             if boost_active:
                                 time_boosting = now - boost_start_time
                                 stop_reason = None
-                                if time_boosting >= 0.45:
-                                    stop_reason = "таймаут імпульсу 0.45с"
-                                elif min_enemy_dist < max(220, min(320, 180 + me_mass * 0.06)):
+                                if time_boosting >= 0.42:
+                                    stop_reason = "таймаут імпульсу 0.42с"
+                                elif raycast_danger >= 2 or min_enemy_dist < 210:
                                     stop_reason = f"наближення ворога ({min_enemy_dist:.0f}px)"
                                 elif dist_center > safe_radius:
                                     stop_reason = "наближення до стіни арени"
                                 elif me_mass < min_mass_for_boost:
                                     stop_reason = f"захист мінімальної маси ({me_mass:.0f} < {min_mass_for_boost})"
-                                elif not should_boost:
+                                elif cluster_mass < 21 or cluster_dist < 35:
                                     stop_reason = "кластер зібрано / ціль зникла"
 
                                 if stop_reason:
@@ -1490,8 +1508,9 @@ def _run_snake_bot_impl(max_runs=3, headless=False):
                                         except Exception as e_cdp:
                                             print(f"[BOT] Помилка keyUp Space: {e_cdp}")
                                     boost_active = False
-                                    # Каскадний буст: якщо попереду ще лежить великий труп (>= 35 маси) і чисто, кулдаун 0.65с замість 2.2с
-                                    boost_cooldown_until = now + (0.65 if (cluster_mass >= 35 and min_enemy_dist > 230) else 2.2)
+                                    # Каскадний буст тільки після плюсового ривка; після мінусового — штраф 3.5с
+                                    cd_sec = 0.75 if (mass_diff > 0 and cluster_mass >= 60 and min_enemy_dist > 240) else (3.5 if mass_diff <= 0 else 2.2)
+                                    boost_cooldown_until = now + cd_sec
                                     if DRY_RUN:
                                         print(f"[DRY_RUN BOOST] ⏹️ Зупинка: {stop_reason} (імпульс {time_boosting:.2f}с, маса: {me_mass:.0f})")
 
