@@ -909,6 +909,7 @@ def _run_snake_bot_impl(max_runs=3, headless=False):
                 last_raycast_log_time = 0.0
                 raycast_panics_count = 0
                 last_telemetry = {}
+                finish_logged_printed = False
 
                 # Забіг триває доти, доки змійка жива (або вичерпано час сесії)
                 last_phase = 1
@@ -1430,9 +1431,9 @@ def _run_snake_bot_impl(max_runs=3, headless=False):
                             elapsed_run = time.time() - start_time
                             # За 15 секунд до кінця марафону скеровуємо змійку в найближчу стіну для гарантованої фіксації рекорду на сервері
                             if not DRY_RUN and elapsed_run >= (max_duration - 15):
-                                if not last_telemetry.get("finish_logged"):
+                                if not finish_logged_printed:
                                     print(f"[BOT] 🏁 ФІНІШ МАРАФОНУ ({int(elapsed_run)}с/{max_duration}с): плановий вихід у стіну для збереження рекорду ({score_earned} монет)!")
-                                    last_telemetry["finish_logged"] = True
+                                    finish_logged_printed = True
                                 target_angle = safe_eval(sb, """
                                     var w = window.__activeWorld;
                                     var me = w && window.__mySnakeId !== undefined ? w.snakes.get(window.__mySnakeId) : null;
