@@ -50,3 +50,45 @@ def test_report_called_with_actual_bot_vars():
     assert "boost_triggers_count = 0" in source, "boost_triggers_count не ініціалізовано"
     assert "rec_line =" in source, "rec_line не визначено"
     assert "place_medal =" not in source, "dead code place_medal все ще присутній у caller"
+
+def test_telegram_report_top20_rank():
+    from src.snake.bot import format_snake_tg_report
+    msg = format_snake_tg_report(
+        run_idx=1,
+        max_runs=1,
+        score_earned=63444,
+        kills_earned=214,
+        duration_sec=5387,
+        boost_triggers_count=153,
+        rec_line="🎯 До рекорду топ-1 сезону (136,162): <b>ще 72,718 монет</b>",
+        nick="newagno",
+        best_score=63444,
+        rank_str="#12 (сезон)",
+        guild_pts="4 215 113",
+        guild_place=3,
+        guild_sub="NEAR за сезон · 37 гравців"
+    )
+    assert "Місце в рейтингу: <b>#12 (сезон)</b>" in msg
+    assert "До рекорду топ-1 сезону (136,162): <b>ще 72,718 монет</b>" in msg
+    assert "Офіційний рекорд: <b>63,444 монет</b>" in msg
+    assert "+63,444 монет" in msg
+
+def test_telegram_report_new_season_record():
+    from src.snake.bot import format_snake_tg_report
+    msg = format_snake_tg_report(
+        run_idx=1,
+        max_runs=1,
+        score_earned=140000,
+        kills_earned=300,
+        duration_sec=5400,
+        boost_triggers_count=200,
+        rec_line="🏆 <b>НОВИЙ РЕКОРД СЕЗОНУ!</b> Перевершено топ-1 на +3,838 монет!",
+        nick="newagno",
+        best_score=140000,
+        rank_str="#1 (сезон)",
+        guild_pts="4 500 000",
+        guild_place=1,
+        guild_sub="NEAR за сезон · 40 гравців"
+    )
+    assert "🏆 <b>НОВИЙ РЕКОРД СЕЗОНУ!</b> Перевершено топ-1 на +3,838 монет!" in msg
+    assert "Місце в рейтингу: <b>#1 (сезон)</b>" in msg

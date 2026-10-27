@@ -1632,9 +1632,18 @@ def _run_snake_bot_impl(max_runs=3, headless=False):
                         var deadRank  = document.querySelector('#cs-d-rank')?.innerText;
 
                         // Рекорд сезону (#1 podium)
-                        var topPtsEl = document.querySelector('#cs-podium .cs-pod[data-p="1"] .cs-pod-pts') || document.querySelector('.cs-pod-pts');
-                        var seasonRecord = topPtsEl ? parseInt(topPtsEl.innerText.replace(/[^0-9]/g, '')) : 0;
-                        if (!seasonRecord) seasonRecord = 48670;
+                        var p1 = document.querySelector('.cs-pod[data-p="1"]');
+                        var seasonRecord = 0;
+                        if (p1) {
+                            var clone = p1.querySelector('.vl') ? p1.querySelector('.vl').cloneNode(true) : p1.cloneNode(true);
+                            clone.querySelectorAll('.cs-bonus-tag, small, i').forEach(el => el.remove());
+                            seasonRecord = parseInt(clone.innerText.replace(/[^0-9]/g, '')) || 0;
+                        }
+                        if (!seasonRecord) {
+                            var topPtsEl = document.querySelector('#cs-podium .cs-pod[data-p="1"] .cs-pod-pts') || document.querySelector('.cs-pod-pts');
+                            seasonRecord = topPtsEl ? parseInt(topPtsEl.innerText.replace(/[^0-9]/g, '')) : 0;
+                        }
+                        if (!seasonRecord || seasonRecord < 50000) seasonRecord = 136162;
 
                         // Список гільдій
                         var guildEls = Array.from(document.querySelectorAll('.cs-g'));
@@ -1658,6 +1667,7 @@ def _run_snake_bot_impl(max_runs=3, headless=False):
                         // Дані користувача з WordPress та localStorage
                         var wp = window.CryptoSnakeWP || {};
                         var acc = wp.account || {};
+                        var myNick = (acc && acc.nick) || 'newagno';
                         var storageKey = 'cryptosnake-io-v1:wp:' + wp.userId;
                         var localData = null;
                         try {
@@ -1669,17 +1679,70 @@ def _run_snake_bot_impl(max_runs=3, headless=False):
                         var bestScore = allCoins.length ? Math.max(...allCoins) : 0;
                         var totalCoins = allCoins.reduce((a, b) => a + b, 0);
 
-                        // Соло-рейтинг користувача
+                        // Соло-рейтинг користувача (багаторівневий пошук: .me -> нік у топ-20 -> подіум -> розрахунок за балами)
                         var soloRankRaw = 
                             document.querySelector('#cs-solo .cs-prow.me .rk')?.innerText
                             || document.querySelector('.cs-prow.me .rk')?.innerText
                             || document.querySelector('[data-me="1"] .rk')?.innerText
                             || null;
+
+                        if (!soloRankRaw) {
+                            var rows = Array.from(document.querySelectorAll('.cs-prow'));
+                            for (var r of rows) {
+                                var nk = r.querySelector('.nk')?.innerText || '';
+                                if (nk.trim().toLowerCase() === myNick.toLowerCase()) {
+                                    soloRankRaw = r.querySelector('.rk')?.innerText || null;
+                                    break;
+                                }
+                            }
+                        }
+
+                        if (!soloRankRaw) {
+                            var pods = Array.from(document.querySelectorAll('.cs-pod'));
+                            for (var pod of pods) {
+                                var nk = pod.querySelector('.nk')?.innerText || '';
+                                if (nk.trim().toLowerCase() === myNick.toLowerCase()) {
+                                    soloRankRaw = pod.getAttribute('data-p') || null;
+                                    break;
+                                }
+                            }
+                        }
+
+                        var currentRunCoins = deadCoins ? parseInt(String(deadCoins).replace(/[^0-9]/g, '')) : 0;
+                        var myEffectiveBest = Math.max(bestScore, currentRunCoins);
+                        if (!soloRankRaw && myEffectiveBest > 0) {
+                            var allScores = [];
+                            var pEls = Array.from(document.querySelectorAll('.cs-pod'));
+                            for (var pod of pEls) {
+                                var pNum = parseInt(pod.getAttribute('data-p')) || 0;
+                                var clone = pod.querySelector('.vl') ? pod.querySelector('.vl').cloneNode(true) : pod.cloneNode(true);
+                                clone.querySelectorAll('.cs-bonus-tag, small, i').forEach(el => el.remove());
+                                var pts = parseInt(clone.innerText.replace(/[^0-9]/g, '')) || 0;
+                                if (pNum && pts) allScores.push({ rank: pNum, pts: pts });
+                            }
+                            var rEls = Array.from(document.querySelectorAll('.cs-prow'));
+                            for (var r of rEls) {
+                                var rk = parseInt(r.querySelector('.rk')?.innerText.replace(/[^0-9]/g, '')) || 0;
+                                var clone = r.querySelector('.vl') ? r.querySelector('.vl').cloneNode(true) : r.cloneNode(true);
+                                clone.querySelectorAll('.cs-bonus-tag, small, i').forEach(el => el.remove());
+                                var pts = parseInt(clone.innerText.replace(/[^0-9]/g, '')) || 0;
+                                if (rk && pts) allScores.push({ rank: rk, pts: pts });
+                            }
+                            allScores.sort((a, b) => b.pts - a.pts);
+                            if (allScores.length > 0) {
+                                var betterCount = allScores.filter(s => s.pts > myEffectiveBest).length;
+                                if (betterCount < 20) {
+                                    soloRankRaw = String(betterCount + 1);
+                                }
+                            }
+                        }
+
                         var deadRankRaw = document.querySelector('#cs-d-rank')?.innerText || null;
 
                         return {
-                            nick: acc.nick || 'newagno',
+                            nick: myNick,
                             season_record: seasonRecord,
+                            solo_rank: soloRankRaw,
                             dead: {
                                 coins: deadCoins,
                                 kills: deadKills,
@@ -1709,13 +1772,12 @@ def _run_snake_bot_impl(max_runs=3, headless=False):
                     kills_earned = int("".join(c for c in str(final_kills) if c.isdigit()))
 
                 nick = stats.get("nick", "newagno")
-                season_record = stats.get("season_record") or 48670
-                if season_record < score_earned:
-                    season_record = score_earned
-                delta_record = season_record - score_earned
-                if delta_record <= 0:
-                    rec_line = f"🏆 <b>НОВИЙ РЕКОРД СЕЗОНУ!</b> Перевершено топ-1 на +{abs(delta_record):,} монет!"
+                season_record = stats.get("season_record") or 136162
+                if score_earned > season_record:
+                    delta_record = score_earned - season_record
+                    rec_line = f"🏆 <b>НОВИЙ РЕКОРД СЕЗОНУ!</b> Перевершено топ-1 на +{delta_record:,} монет!"
                 else:
+                    delta_record = season_record - score_earned
                     rec_line = f"🎯 До рекорду топ-1 сезону ({season_record:,}): <b>ще {delta_record:,} монет</b>"
 
                 my_guild = stats.get("my_guild") or {}
