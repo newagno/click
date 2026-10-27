@@ -1247,8 +1247,8 @@ def _run_snake_bot_impl(max_runs=3, headless=False):
                                     for (var i = 0; i < rayDists.length; i++) {
                                         var d = rayDists[i];
                                         var danger = rayDists.length - i; // 4=впритул, 3=близько, 2=середньо, 1=далеко
-                                        // Широке віяло променів: ±24° на ближній дистанції та ±16° на дальній (170-250px) проти бічних бустерів
-                                        var spread = (i <= 1) ? [-0.42, -0.21, 0, 0.21, 0.42] : [-0.28, 0, 0.28];
+                                        // 5 променів (±24°) на ближній дистанції (i<=1), 3 промені (±11.5°) на середній (i==2) і 1 на дальній (i==3)
+                                        var spread = (i <= 1) ? [-0.42, -0.21, 0, 0.21, 0.42] : ((i === 2) ? [-0.20, 0, 0.20] : [0]);
                                         for (var sIdx = 0; sIdx < spread.length; sIdx++) {
                                             var a = angle + spread[sIdx];
                                             var px = hx + Math.cos(a) * d;
@@ -1288,8 +1288,9 @@ def _run_snake_bot_impl(max_runs=3, headless=False):
                                 var raycastPanicked = false;
                                 var raycastDeltaDeg = 0;
                                 var raycastDanger = Math.max(primaryDanger, headingDanger);
-                                var closeEmergency = (minEnemyDist < 92);
-                                // Hard Evade: перехоплюємо кермо при загрозі на променях або при критичному зближенні (< 92px)
+                                // Не тригеримо фальшивий evade lv.0, коли ворог позаду, а всі промені попереду чисті (raycastDanger === 0)
+                                var closeEmergency = (minEnemyDist < 88 && raycastDanger >= 1);
+                                // Hard Evade: перехоплюємо кермо при загрозі на променях або при критичному зближенні спереду/збоку
                                 if (primaryDanger >= 2 || headingDanger >= 3 || closeEmergency) {
                                     var candidateDeltas = [0, 0.28, -0.28, 0.55, -0.55, 0.82, -0.82, 1.12, -1.12, 1.45, -1.45, 1.75, -1.75];
                                     var minCost = 999999;
@@ -1301,8 +1302,11 @@ def _run_snake_bot_impl(max_runs=3, headless=False):
                                         var angleDiff = Math.abs(Math.atan2(Math.sin(testAngle - targetAngle), Math.cos(testAngle - targetAngle)));
                                         // Жорсткий штраф +3.2 за зміну напрямку розвороту, щоб унеможливити метання вправо->вліво перед носом ворога
                                         var flipPenalty = (prevSign !== 0 && delta !== 0 && Math.sign(delta) !== prevSign) ? 3.2 : 0.0;
+                                        // Біля краю арени штрафуємо розвороти назовні від центру, щоб завжди ухилятися всередину карти
+                                        var outCos = (distFromCenter > safeRadius - 120) ? ((hx * Math.cos(testAngle) + hy * Math.sin(testAngle)) / (distFromCenter || 1)) : -1.0;
+                                        var wallPenalty = (outCos > 0) ? (3.5 * outCos) : 0.0;
                                         var goalWeight = (closeEmergency || raycastDanger >= 3) ? 0.25 : 1.0;
-                                        var cost = 7.0 * dScore + goalWeight * angleDiff + 0.22 * Math.abs(delta) + flipPenalty;
+                                        var cost = 7.0 * dScore + goalWeight * angleDiff + 0.22 * Math.abs(delta) + flipPenalty + wallPenalty;
                                         if (cost < minCost) {
                                             minCost = cost;
                                             safestAngle = testAngle;
@@ -1426,6 +1430,9 @@ def _run_snake_bot_impl(max_runs=3, headless=False):
                             elapsed_run = time.time() - start_time
                             # За 15 секунд до кінця марафону скеровуємо змійку в найближчу стіну для гарантованої фіксації рекорду на сервері
                             if not DRY_RUN and elapsed_run >= (max_duration - 15):
+                                if not last_telemetry.get("finish_logged"):
+                                    print(f"[BOT] 🏁 ФІНІШ МАРАФОНУ ({int(elapsed_run)}с/{max_duration}с): плановий вихід у стіну для збереження рекорду ({score_earned} монет)!")
+                                    last_telemetry["finish_logged"] = True
                                 target_angle = safe_eval(sb, """
                                     var w = window.__activeWorld;
                                     var me = w && window.__mySnakeId !== undefined ? w.snakes.get(window.__mySnakeId) : null;
