@@ -962,13 +962,16 @@ def _run_snake_bot_impl(max_runs=3, headless=False):
 
                                 var hx = me.pts[0];
                                 var hy = me.pts[1];
+                                var myGuild = me.guild || 'near';
+                                var meR = me.r || (10 + Math.min(26, 0.9 * Math.sqrt(meMass)));
                                 var headingX = (me.pts.length >= 4) ? (hx - me.pts[2]) : Math.cos(me.ang || 0);
                                 var headingY = (me.pts.length >= 4) ? (hy - me.pts[3]) : Math.sin(me.ang || 0);
                                 var hNorm = Math.hypot(headingX, headingY) || 1.0;
                                 headingX /= hNorm;
                                 headingY /= hNorm;
+                                var currentHeading = (me.ang !== undefined) ? me.ang : Math.atan2(headingY, headingX);
 
-                                // 1. Пошук монет із курсовим пріоритетом (Forward Cone) та розширений сканер дропу (520px)
+                                // 1. Пошук монет із курсовим пріоритетом та сканер трупів (640px, NEAR x2)
                                 var foodFx = 0;
                                 var foodFy = 0;
                                 var drops = [];
@@ -985,21 +988,24 @@ def _run_snake_bot_impl(max_runs=3, headless=False):
                                         var uy = dy / dist;
                                         var cosAngle = ux * headingX + uy * headingY;
 
-                                        // Ігноруємо дрібні монети у сліпій зоні за головою (< 55px і кут > 95°), щоб не крутитися на місці
+                                        // Ігноруємо дрібні монети у сліпій зоні розвороту позаду голови (< 55px і кут > 95°)
                                         if (dist < 55 && cosAngle < -0.1 && f.natural !== false) continue;
 
+                                        var isMyGuildCoin = (f.type === myGuild);
                                         if (dist <= 680) {
                                             var valMult = (f.natural === false && f.v) ? Math.min(2.5, Math.sqrt(f.v) * 1.15) : 1.0;
-                                            var alignMult = Math.max(0.75, 1.0 + 0.55 * cosAngle); // Не менше 0.75x, щоб не голодувати
-                                            var weight = (f.type === 'near' ? 3.5 : 1.0) * valMult * alignMult;
+                                            var alignMult = Math.max(0.65, 1.0 + 0.55 * cosAngle);
+                                            var guildWeight = isMyGuildCoin ? 3.8 : 1.0;
                                             var effDist = dist * (dist + 35.0);
-                                            var force = weight / effDist;
+                                            var force = (guildWeight * valMult * alignMult) / effDist;
                                             foodFx += ux * force;
                                             foodFy += uy * force;
                                         }
 
-                                        if (f.natural === false && dist <= 520) {
-                                            drops.push({ x: f.x, y: f.y, v: (f.v || 1), dist: dist });
+                                        // Трупні монети живуть 75с; монети своєї гільдії дають x2 маси та очок (ownCoinMultiplier: 2)
+                                        if (f.natural === false && dist <= 640) {
+                                            var effectiveVal = (f.v || 1) * (isMyGuildCoin ? 2.0 : 1.0);
+                                            drops.push({ x: f.x, y: f.y, v: effectiveVal, dist: dist });
                                         }
                                     }
                                 }
@@ -1057,7 +1063,7 @@ def _run_snake_bot_impl(max_runs=3, headless=False):
                                 if (bestCluster) {
                                     var pathAngle = Math.atan2(bestCluster.y - hy, bestCluster.x - hx);
                                     for (var other of w.snakes.values()) {
-                                        if (other.id === me.id || other.guild === 'near') continue;
+                                        if (other.id === me.id || !other.alive || other.guild === myGuild) continue;
                                         if (!other.pts || other.pts.length < 2) continue;
                                         var step = other.pts.length > 40 ? 4 : 2;
                                         for (var p = 0; p < other.pts.length; p += step) {
@@ -1094,20 +1100,24 @@ def _run_snake_bot_impl(max_runs=3, headless=False):
                                 var avoidFy = 0;
                                 var minEnemyDist = 9999;
                                 for (var other of w.snakes.values()) {
-                                    if (other.id === me.id) continue;
-                                    if (other.guild === 'near') continue; // союзники проходять крізь одне одного
+                                    if (other.id === me.id || !other.alive) continue;
+                                    if (other.guild === myGuild) continue; // friendlyFire: false
+                                    if ((other.shield || 0) > 0.6) continue; // безпечний спавн-щит із запасом часу
                                     if (!other.pts || other.pts.length < 2) continue;
 
-                                    // Крок p += 4 зберігає первинне калібрування сили ухилення (I3)
+                                    var isSmallerEnemy = (other.mass || 0) < meMass * 0.8;
                                     for (var p = 0; p < other.pts.length; p += 4) {
                                         var ox = other.pts[p];
                                         var oy = other.pts[p + 1];
                                         var odist = Math.hypot(hx - ox, hy - oy);
-                                        if (odist < minEnemyDist) minEnemyDist = odist;
 
-                                        // Динамічна зона безпеки avoidRadius та підвищена небезпека від голови ворога
+                                        // Голова меншого ворога (p === 0) при лобовому ударі гине сама, тому не блокує minEnemyDist
+                                        if (!(p === 0 && isSmallerEnemy) && odist < minEnemyDist) {
+                                            minEnemyDist = odist;
+                                        }
+
                                         if (odist < avoidRadius && odist > 1) {
-                                            var headMultiplier = (p === 0) ? 2.5 : 1.0;
+                                            var headMultiplier = (p === 0) ? (isSmallerEnemy ? 0.35 : 2.5) : 1.0;
                                             var repForce = (90.0 * headMultiplier) / (odist * odist);
                                             avoidFx += ((hx - ox) / odist) * repForce;
                                             avoidFy += ((hy - oy) / odist) * repForce;
@@ -1167,6 +1177,60 @@ def _run_snake_bot_impl(max_runs=3, headless=False):
                                 var finalY = foodFy * foodWeight + clusterFy * clusterWeight + avoidFy * 5.0 + wallFy * 7.5 + coreFy;
                                 var targetAngle = Math.atan2(finalY, finalX);
 
+                                var checkRaySafety = function(angle) {
+                                    var maxR = arenaRadius - 1.5 * meR;
+                                    var maxRSq = maxR * maxR;
+                                    var rayDists = [meR + 12, 2.2 * meR + 25, 3.4 * meR + 50, 4.6 * meR + 85];
+                                    for (var i = 0; i < rayDists.length; i++) {
+                                        var d = rayDists[i];
+                                        var px = hx + Math.cos(angle) * d;
+                                        var py = hy + Math.sin(angle) * d;
+                                        var danger = rayDists.length - i; // 4=впритул, 3=близько, 2=середньо, 1=далеко
+                                        if (px * px + py * py > maxRSq) return danger;
+
+                                        for (var other of w.snakes.values()) {
+                                            if (other.id === me.id || !other.alive) continue;
+                                            if (other.guild === myGuild) continue;
+                                            if ((other.shield || 0) > 0.6) continue;
+                                            if (!other.pts || other.pts.length < 2) continue;
+
+                                            var otherR = other.r || 16;
+                                            var hitDist = otherR + meR + 6;
+                                            var hitDistSq = hitDist * hitDist;
+                                            var isSmaller = (other.mass || 0) < meMass * 0.85;
+                                            // Перші 3 точки (p = 0, 2, 4 -> segIdx <= 2) меншої змії безпечні; тулуб (p >= 6) смертельний завжди
+                                            var startP = (isSmaller && !other.shield) ? 6 : 0;
+
+                                            for (var p = startP; p < other.pts.length; p += 2) {
+                                                var sx = other.pts[p] - px;
+                                                var sy = other.pts[p + 1] - py;
+                                                if (sx * sx + sy * sy < hitDistSq) return danger;
+                                            }
+                                        }
+                                    }
+                                    return 0;
+                                };
+
+                                var primaryDanger = checkRaySafety(targetAngle);
+                                var headingDanger = checkRaySafety(currentHeading);
+                                // Перехоплюємо кермо лише при близькій/середній небезпеці (primaryDanger >= 2)
+                                if (primaryDanger >= 2) {
+                                    var candidateDeltas = [0, 0.35, -0.35, 0.7, -0.7, 1.1, -1.1, 1.6, -1.6, 2.3, -2.3];
+                                    var minCost = 999999;
+                                    var safestAngle = targetAngle;
+                                    for (var delta of candidateDeltas) {
+                                        var testAngle = currentHeading + delta;
+                                        var dScore = checkRaySafety(testAngle);
+                                        var angleDiff = Math.abs(Math.atan2(Math.sin(testAngle - targetAngle), Math.cos(testAngle - targetAngle)));
+                                        var cost = 5.0 * dScore + angleDiff;
+                                        if (cost < minCost) {
+                                            minCost = cost;
+                                            safestAngle = testAngle;
+                                        }
+                                    }
+                                    targetAngle = safestAngle;
+                                }
+
                                 // 6. Умови для безпечного та прибуткового Boost (Turbo Vacuum Wave 3):
                                 // - Кластер з deathDrop >= 21 маси (поріг окупності)
                                 // - Жодного ворога ближче 250px (строгий запобіжник!)
@@ -1175,11 +1239,13 @@ def _run_snake_bot_impl(max_runs=3, headless=False):
                                 // - Відстань до кластера > 40px (ще не досягли)
                                 // - Безпечна відстань від краю арени
                                 var minMassForBoost = window.__minMassForBoost || 350;
-                                var maxBoostDist = (bestCluster && bestCluster.mass >= 40) ? 420 : 280;
+                                var maxBoostDist = (bestCluster && bestCluster.mass >= 40) ? 450 : 300;
                                 var boostCandidate = Boolean(
                                     bestCluster &&
                                     bestCluster.mass >= 21 &&
-                                    minEnemyDist > 280 && // Підняли поріг з 240 до 280px для безпеки
+                                    primaryDanger === 0 &&
+                                    headingDanger === 0 &&
+                                    minEnemyDist > 210 &&
                                     meMass >= minMassForBoost &&
                                     bestCluster.dist > 45 &&
                                     bestCluster.dist <= maxBoostDist &&
@@ -1346,12 +1412,12 @@ def _run_snake_bot_impl(max_runs=3, headless=False):
                     if DRY_RUN and (ticks % 10 == 0):
                         print(f"[DRY] mass={me_mass:.0f} phase={phase_val} avoidR={avoid_r_val:.0f} foodW={food_w_val:.1f} clusterW={cluster_w_val:.1f}")
 
-                    if ticks % 50 == 0:
+                    if ticks % 40 == 0:
                         alive_time = int(time.time() - start_time)
                         boost_tag = " [BOOST]" if boost_active else ""
                         print(f"[BOT] Арена: {alive_time}с/{max_duration}с | Монети: {score_earned} | З'їдено: {kills_earned} | Маса: {me_mass:.0f}{boost_tag} | Фаза {phase_val} (avoidR {avoid_r_val:.0f}) | Boosts: {boost_triggers_count} (block B:{path_safe_blocked_count}/S:{path_safe_steering_blocked_count})")
 
-                    time.sleep(0.05)
+                    time.sleep(0.06)
 
                 # Забезпечуємо відпускання клавіші Space після завершення забігу
                 if boost_active:
@@ -1515,18 +1581,18 @@ def _run_snake_bot_impl(max_runs=3, headless=False):
                     guild_sub=guild_sub
                 )
 
-                print("[BOT] Надсилаємо оновлений звіт у Telegram...")
-                send_telegram_message(tg_message)
-
-                # Перевірка на спавн-смерть (менше 90 секунд)
-                if duration_sec < 90 and not DRY_RUN and attempts < max_attempts:
-                    print(f"[BOT] ⚠️ Спавн-смерть на {duration_sec}с. Перезапуск спроби {attempts+1}...")
+                is_spawn_death = duration_sec < 45 and not DRY_RUN and attempts < max_attempts
+                if not is_spawn_death:
+                    print("[BOT] Надсилаємо оновлений звіт у Telegram...")
+                    send_telegram_message(tg_message)
+                else:
+                    print(f"[BOT] ⚠️ Спавн-смерть на {duration_sec}с (<45с). Пропускаємо Telegram і перезапускаємо спробу {attempts+1}...")
                     try:
                         sb.uc_open_with_reconnect(GAME_URL, reconnect_time=4)
                         sb.sleep(3)
                     except Exception:
                         pass
-                    continue  # Повторюємо той самий run_idx
+                    continue
 
                 run_idx += 1
                 if run_idx <= max_runs:

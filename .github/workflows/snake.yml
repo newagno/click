@@ -40,7 +40,7 @@ jobs:
     timeout-minutes: 120
     env:
       MIN_MASS_FOR_BOOST: "400"
-      BLOCK_STEERING_ON_UNSAFE: "1"
+      BLOCK_STEERING_ON_UNSAFE: "0"
       ENABLE_CORE_FX: "0"
       DRY_RUN: "0"
     steps:
@@ -104,7 +104,7 @@ jobs:
           RUNS_COUNT="${{ github.event.inputs.runs || '1' }}"
           echo "[*] MAX_DURATION=$MAX_DURATION (input: ${{ github.event.inputs.max_duration || 'default' }})"
           echo "[*] Launching CryptoSnake bot with $RUNS_COUNT runs (DRY_RUN=$DRY_RUN)..."
-          xvfb-run --auto-servernum --server-args="-screen 0 1920x1080x24" python src/snake/run.py "$RUNS_COUNT"
+          xvfb-run --auto-servernum --server-args="-screen 0 1280x720x16" python src/snake/run.py "$RUNS_COUNT"
 
       - name: Commit and Push cookies
         if: always()
