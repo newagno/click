@@ -1,10 +1,11 @@
 name: CryptoSnake Auto-Play (3 Sessions/Day)
 
 on:
-  schedule:
-    - cron: '0 6 * * *'      # 09:00 Kyiv (Ранок)
-    - cron: '0 11 * * *'     # 14:00 Kyiv (День)
-    - cron: '0 17 * * *'     # 20:00 Kyiv (Вечір)
+  # schedule вимкнено на час локальних марафонів, щоб паралельний старт не анульовував квиток активного забігу
+  # schedule:
+  #   - cron: '0 6 * * *'
+  #   - cron: '0 11 * * *'
+  #   - cron: '0 17 * * *'
   workflow_dispatch:
     inputs:
       runs:
@@ -37,7 +38,7 @@ permissions:
 jobs:
   play_session:
     runs-on: ubuntu-latest
-    timeout-minutes: 120
+    timeout-minutes: 350
     env:
       MIN_MASS_FOR_BOOST: "400"
       BLOCK_STEERING_ON_UNSAFE: "0"
