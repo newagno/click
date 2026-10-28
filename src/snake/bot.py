@@ -1165,7 +1165,7 @@ def _run_snake_bot_impl(max_runs=3, headless=False):
                                 var pathSafeSteeringBlocked = Boolean(bestCluster && bestCluster.dist > 1 && !isPathSafe);
                                 var blockSteeringOnUnsafe = Boolean(window.__blockSteeringOnUnsafe) && meMass > 400;
 
-                                // 3. Ухилення від ворожих змій + Bounty-Hunter (в лоб перемагає більший: p<=2 меншої змії безпечні!)
+                                // 3. Ухилення від ворожих змій (броня v3.8 на 9642с: повний контроль усіх сегментів p>=0)
                                 var avoidRadius = (meMass < 220) ? 230 : Math.max(205, Math.min(255, 180 + meMass * 0.04));
                                 var avoidFx = 0;
                                 var avoidFy = 0;
@@ -1182,18 +1182,17 @@ def _run_snake_bot_impl(max_runs=3, headless=False):
 
                                     var hasShield = Boolean(other.shield);
                                     var otherMass = other.mass || 0;
-                                    var isSmallerEnemy = !hasShield && (otherMass < meMass * 0.88);
+                                    var isSmallerEnemy = !hasShield && (otherMass < meMass * 0.78);
                                     var oR = other.r || (10 + Math.min(26, 0.9 * Math.sqrt(otherMass)));
-                                    var stepP = other.pts.length <= 12 ? 2 : 4;
+                                    var stepP = other.pts.length <= 8 ? 2 : 4;
                                     for (var p = 0; p < other.pts.length; p += stepP) {
                                         var ox = other.pts[p];
                                         var oy = other.pts[p + 1];
                                         var odist = Math.hypot(hx - ox, hy - oy);
                                         var segCos = ((ox - hx) / (odist || 1)) * headingX + ((oy - hy) / (odist || 1)) * headingY;
 
-                                        // Для менших змій (isSmallerEnemy) p=0 та p=2 не вбивають нас, тому в minEnemyDist рахуємо тільки їхнє тіло p>=4
-                                        var isLethalSeg = (!isSmallerEnemy || p >= 4);
-                                        if (isLethalSeg && odist < minEnemyDist) {
+                                        // Завжди фіксуємо реальну дистанцію до голови й тіла ворога (крім атакованої голови huntedEnemyId на масі < 1350)
+                                        if (!(p === 0 && other.id === huntedEnemyId) && odist < minEnemyDist) {
                                             minEnemyDist = odist;
                                             nearestEnemy = {
                                                 id: other.id,
@@ -1203,21 +1202,19 @@ def _run_snake_bot_impl(max_runs=3, headless=False):
                                                 is_head: (p === 0)
                                             };
                                         }
-                                        if (isLethalSeg && segCos > 0.35 && odist < minFrontEnemyDist) {
+                                        if (!(p === 0 && other.id === huntedEnemyId) && segCos > 0.25 && odist < minFrontEnemyDist) {
                                             minFrontEnemyDist = odist;
                                         }
 
-                                        // Bounty Head-Hunter: у рушії лоб-у-лоб (p<=2) завжди виграє більша змія, а killBounty = 15% від other.coins!
-                                        if (!evadeActiveNow && p === 0 && isSmallerEnemy && meMass >= 260 && odist < 190 && odist > 12 && other.pts.length >= 6) {
+                                        // Активне полювання (Head-Hunter): ТІЛЬКИ на мобільних масах 500-1350 (у Фазі 3 >=1350 вимкнено для 100% живучості!)
+                                        if (!evadeActiveNow && p === 0 && isSmallerEnemy && otherMass >= 60 && meMass >= 500 && meMass < 1350 && odist < 115 && odist > 15 && other.pts.length >= 6) {
                                             var eHx = ox - other.pts[2];
                                             var eHy = oy - other.pts[3];
                                             var eNorm = Math.hypot(eHx, eHy) || 1.0;
                                             var enemyApproachingCos = ((hx - ox) / odist) * (eHx / eNorm) + ((hy - oy) / odist) * (eHy / eNorm);
-                                            // Таран у лоб безпечний, коли ворог іде назустріч (його тіло p>=4 позаду його голови!)
-                                            if (segCos > 0.58 && enemyApproachingCos > 0.45) {
-                                                var bountyCoins = Math.round((other.coins || 0) * 0.15) + otherMass * 0.75;
-                                                var bountyMult = Math.min(3.2, 1.0 + bountyCoins / 180.0);
-                                                var huntForce = (145.0 * bountyMult) / (odist * (odist + 18.0));
+                                            if (segCos > 0.76 && enemyApproachingCos > 0.60) {
+                                                var bountyMult = Math.min(2.2, 1.0 + Math.round((other.coins || 0) * 0.15) / 220.0);
+                                                var huntForce = (115.0 * bountyMult) / (odist * (odist + 20.0));
                                                 foodFx += ((ox - hx) / odist) * huntForce;
                                                 foodFy += ((oy - hy) / odist) * huntForce;
                                                 huntedEnemyId = other.id;
@@ -1225,10 +1222,9 @@ def _run_snake_bot_impl(max_runs=3, headless=False):
                                         }
 
                                         if (odist < avoidRadius && odist > 1) {
-                                            // Якщо p=0 меншої змії — не відштовхуємося від неї сильно (бо лоб-у-лоб ми її з'їдаємо!), відштовхуємося від p>=4 або більших змій
-                                            if (p <= 2 && isSmallerEnemy) continue;
+                                            // Враховуємо реальну відстань між оболонками (skin-to-skin) та рух голови ворога назустріч
                                             var skinDist = Math.max(12.0, odist - (meR + oR) * 0.85);
-                                            var headMultiplier = (p === 0) ? 2.8 : 1.0;
+                                            var headMultiplier = (p === 0) ? ((other.id === huntedEnemyId) ? 0.30 : ((isSmallerEnemy && meMass < 1200) ? 0.65 : 2.8)) : 1.0;
                                             if (p === 0 && other.pts.length >= 4) {
                                                 var evx = ox - other.pts[2];
                                                 var evy = oy - other.pts[3];
@@ -1236,20 +1232,20 @@ def _run_snake_bot_impl(max_runs=3, headless=False):
                                                 var appCos = ((hx - ox) / odist) * (evx / evNorm) + ((hy - oy) / odist) * (evy / evNorm);
                                                 if (appCos > 0.2) headMultiplier *= (1.0 + 0.65 * appCos);
                                             }
-                                            var closeBoost = (odist < 145) ? ((odist < 98) ? 2.8 : 1.75) : 1.0;
-                                            var repForce = (100.0 * headMultiplier * closeBoost) / (skinDist * skinDist);
+                                            var closeBoost = (odist < 155) ? ((odist < 105) ? 3.0 : 1.85) : 1.0;
+                                            var repForce = (105.0 * headMultiplier * closeBoost) / (skinDist * skinDist);
                                             avoidFx += ((hx - ox) / odist) * repForce;
                                             avoidFy += ((hy - oy) / odist) * repForce;
                                         }
                                     }
                                 }
 
-                                // Далекобійний магніт: потужне тяжіння (cappedMass 520), гаситься ТІЛЬКИ якщо ворог прямо за курсом (minFrontEnemyDist < 135)
-                                if (bestCluster && bestCluster.dist > 40 && (!blockSteeringOnUnsafe || isPathSafe)) {
+                                // Далекобійний магніт: збалансована тяга (cappedMass 380) із суворим круговим гасінням при ворогах < 165px
+                                if (bestCluster && bestCluster.dist > 45 && (!blockSteeringOnUnsafe || isPathSafe)) {
                                     var cDist = bestCluster.dist;
-                                    var cappedMass = Math.min(bestCluster.mass, 520);
-                                    var safetyDamp = isPathSafe ? (minFrontEnemyDist < 135 ? 0.90 : 1.65) : (minFrontEnemyDist > 155 ? 0.80 : 0.35);
-                                    var cForce = (cappedMass / (cDist * (105.0 + 0.30 * cDist))) * safetyDamp;
+                                    var cappedMass = Math.min(bestCluster.mass, 380);
+                                    var safetyDamp = isPathSafe ? (minEnemyDist < 150 ? 0.75 : 1.50) : (minEnemyDist > 175 ? 0.58 : 0.24);
+                                    var cForce = (cappedMass / (cDist * (108.0 + 0.31 * cDist))) * safetyDamp;
                                     clusterFx = ((bestCluster.x - hx) / cDist) * cForce;
                                     clusterFy = ((bestCluster.y - hy) / cDist) * cForce;
                                 }
@@ -1279,17 +1275,20 @@ def _run_snake_bot_impl(max_runs=3, headless=False):
                                 var foodWeight = 1.0;
                                 var clusterWeight = 2.0;
                                 if (phase === 3) {
-                                    foodWeight = 2.35 + Math.min(0.65, Math.max(0, meMass - 1600) * 0.0008);
-                                    clusterWeight = 3.8;
+                                    foodWeight = 2.15 + Math.min(0.55, Math.max(0, meMass - 1600) * 0.0007);
+                                    clusterWeight = 3.5;
                                 } else if (phase === 2) {
-                                    foodWeight = 1.35;
-                                    clusterWeight = 2.9;
+                                    foodWeight = 1.30;
+                                    clusterWeight = 2.8;
                                 }
 
-                                // Гасимо тягу до їжі/кластерів ТІЛЬКИ коли летальний сегмент прямо попереду (< 110px)
-                                if (minFrontEnemyDist < 110) {
-                                    foodWeight *= 0.55;
-                                    clusterWeight *= 0.25;
+                                // Двоступеневе кругове гасіння магнітів їжі/кластерів при зближенні з ворогом (< 170px та < 115px), як у v3.8
+                                if (minEnemyDist < 115) {
+                                    foodWeight *= 0.45;
+                                    clusterWeight *= 0.15;
+                                } else if (minEnemyDist < 170) {
+                                    foodWeight *= 0.72;
+                                    clusterWeight *= 0.38;
                                 }
 
                                 // М'яке відхилення від ядра (coreFx): вимкнено при наявності будь-якого кластера, щоб не втрачати м'ясо в центрі
@@ -1334,28 +1333,25 @@ def _run_snake_bot_impl(max_runs=3, headless=False):
                                                 if (other.guild === myGuild) continue;
                                                 if (!other.pts || other.pts.length < 2) continue;
 
-                                                var otherMassR = other.mass || 0;
-                                                var otherR = other.r || (10 + Math.min(26, 0.9 * Math.sqrt(otherMassR)));
-                                                var hitDist = otherR + meR + (spread[sIdx] === 0 ? 11 : 7);
+                                                var otherR = other.r || (10 + Math.min(26, 0.9 * Math.sqrt(other.mass || 0)));
+                                                var hitDist = otherR + meR + (spread[sIdx] === 0 ? 12 : 8);
                                                 var hitDistSq = hitDist * hitDist;
-                                                // У CryptoSnakeCore сегменти p=0 та p=2 меншої нещитової змії НЕ вбивають більшу змію! Перевіряємо їх тільки з p=4
-                                                var smallerHarmlessHead = (!other.shield && otherMassR < meMass * 0.88 && other.pts.length > 6);
-                                                var startP = smallerHarmlessHead ? 4 : 0;
+                                                var startP = (other.id === huntedEnemyId && meMass < 1350 && other.pts.length > 8) ? 4 : 0;
 
-                                                // Екстраполюємо голову ТІЛЬКИ для більших/рівних змій (startP === 0) на ближніх променях (i <= 2)
-                                                if (startP === 0 && i <= 2 && other.pts.length >= 4) {
+                                                // Векторна екстраполяція голови будь-якого ворога (бо за головою на відстані 20px іде смертельний сегмент p=4!)
+                                                if (startP === 0 && other.pts.length >= 4) {
                                                     var ehx = other.pts[0];
                                                     var ehy = other.pts[1];
                                                     var edist = Math.hypot(ehx - hx, ehy - hy);
-                                                    if (edist < 240) {
+                                                    if (edist < 300) {
                                                         var vx = ehx - other.pts[2];
                                                         var vy = ehy - other.pts[3];
                                                         var vNorm = Math.hypot(vx, vy) || 1.0;
                                                         vx /= vNorm;
                                                         vy /= vNorm;
                                                         var appCosRay = ((hx - ehx) / (edist || 1)) * vx + ((hy - ehy) / (edist || 1)) * vy;
-                                                        if (appCosRay > 0.0) {
-                                                            var leadL = Math.max(28.0, Math.min(60.0, edist * 0.30)) * (1.0 + 0.30 * appCosRay);
+                                                        if (appCosRay > -0.15) {
+                                                            var leadL = Math.max(32.0, Math.min(68.0, edist * 0.33)) * (1.0 + 0.35 * Math.max(0, appCosRay));
                                                             var p1x = ehx + vx * (0.5 * leadL) - px;
                                                             var p1y = ehy + vy * (0.5 * leadL) - py;
                                                             var p2x = ehx + vx * leadL - px;
@@ -1612,11 +1608,10 @@ def _run_snake_bot_impl(max_runs=3, headless=False):
                             # 1. Запобіжники вимкнення активного Boost
                             if boost_active:
                                 time_boosting = now - boost_start_time
-                                max_impulse = 0.80 if (cluster_mass >= 90 and min_enemy_dist > 230 and raycast_danger <= 1) else 0.52
                                 stop_reason = None
-                                if time_boosting >= max_impulse:
-                                    stop_reason = f"таймаут імпульсу {max_impulse:.2f}с"
-                                elif raycast_danger >= 2 or min_enemy_dist < 205:
+                                if time_boosting >= 0.50:
+                                    stop_reason = "таймаут імпульсу 0.50с"
+                                elif raycast_danger >= 2 or min_enemy_dist < 210:
                                     stop_reason = f"наближення ворога ({min_enemy_dist:.0f}px)"
                                 elif dist_center > safe_radius:
                                     stop_reason = "наближення до стіни арени"
@@ -1649,8 +1644,8 @@ def _run_snake_bot_impl(max_runs=3, headless=False):
                                         except Exception as e_cdp:
                                             print(f"[BOT] Помилка keyUp Space: {e_cdp}")
                                     boost_active = False
-                                    # Швидкий каскадний Chain-Boost (0.45с / 1.1с) після плюсового ривка для повного збору туші
-                                    cd_sec = 0.45 if (mass_diff > 0 and cluster_mass >= 55 and min_enemy_dist > 225) else (3.0 if mass_diff <= 0 else 1.1)
+                                    # Перевірений кулдаун із 9642-секундного марафону (0.75с каскад при великому кластері і ворогах > 240px)
+                                    cd_sec = 0.75 if (mass_diff > 0 and cluster_mass >= 60 and min_enemy_dist > 240) else (3.5 if mass_diff <= 0 else 2.0)
                                     boost_cooldown_until = now + cd_sec
                                     if DRY_RUN:
                                         print(f"[DRY_RUN BOOST] ⏹️ Зупинка: {stop_reason} (імпульс {time_boosting:.2f}с, маса: {me_mass:.0f})")
