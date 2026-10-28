@@ -369,7 +369,12 @@ PATH_SAFE_CONE_RAD = math.radians(PATH_SAFE_CONE_DEG)
 
 def is_session_timeout(elapsed: float, is_ci: bool) -> bool:
     """Hard watchdog check for runs (cutoff at limit + 60s buffer for sync/reporting)."""
-    limit = 5500 if is_ci else 5800
+    base_limit = 5500 if is_ci else 5800
+    try:
+        env_max = int(os.getenv("MAX_DURATION", "0") or "0")
+    except ValueError:
+        env_max = 0
+    limit = max(base_limit, env_max + 200)
     return elapsed >= (limit + 60)
 
 
@@ -910,6 +915,12 @@ def _run_snake_bot_impl(max_runs=3, headless=False):
                 raycast_panics_count = 0
                 last_telemetry = {}
                 finish_logged_printed = False
+                boost_win_count = 0
+                boost_loss_count = 0
+                boost_net_mass = 0.0
+                kill_coins_est = 0
+                starvation_events = 0
+                mass_sum_accum = 0.0
 
                 # Забіг триває доти, доки змійка жива (або вичерпано час сесії)
                 last_phase = 1
@@ -999,12 +1010,12 @@ def _run_snake_bot_impl(max_runs=3, headless=False):
                                         if (dist < 55 && cosAngle < -0.1 && f.natural !== false) continue;
 
                                         var isMyGuildCoin = (f.type === myGuild);
-                                        if (dist <= 680) {
+                                        if (dist <= 820) {
                                             var valMult = (f.natural === false && f.v) ? Math.min(2.5, Math.sqrt(f.v) * 1.15) : 1.0;
                                             var alignMult = Math.max(0.65, 1.0 + 0.55 * cosAngle);
                                             // Попутний пилосос (Transit Grazing): не пропускаємо близькі монети прямо за курсом під час польоту до кластера
-                                            if (dist < 130 && cosAngle > 0.75) alignMult *= 2.1;
-                                            var guildWeight = isMyGuildCoin ? 3.8 : 1.0;
+                                            if (dist < 150 && cosAngle > 0.72) alignMult *= 2.35;
+                                            var guildWeight = isMyGuildCoin ? 4.8 : 1.0;
                                             var effDist = dist * (dist + 35.0);
                                             var force = (guildWeight * valMult * alignMult) / effDist;
                                             foodFx += ux * force;
@@ -1085,7 +1096,7 @@ def _run_snake_bot_impl(max_runs=3, headless=False):
                                     }
                                 }
 
-                                // Перевірка безпеки коридору до кластера на 380px у конусі ±22° (щоб не блокувати фарм далекими ботами)
+                                // Перевірка безпеки коридору до кластера на 340px у конусі ±17° (0.30 рад), щоб зменшити зайві block S
                                 var isPathSafe = true;
                                 if (bestCluster) {
                                     var pathAngle = Math.atan2(bestCluster.y - hy, bestCluster.x - hx);
@@ -1097,10 +1108,10 @@ def _run_snake_bot_impl(max_runs=3, headless=False):
                                         for (var p = startIdx; p < other.pts.length; p += step) {
                                             var ox = other.pts[p], oy = other.pts[p + 1];
                                             var enemyDist = Math.hypot(ox - hx, oy - hy);
-                                            if (enemyDist > Math.min(bestCluster.dist, 380)) continue;
+                                            if (enemyDist > Math.min(bestCluster.dist - 20, 340)) continue;
                                             var enemyAngle = Math.atan2(oy - hy, ox - hx);
                                             var angleDiff = Math.abs(Math.atan2(Math.sin(enemyAngle - pathAngle), Math.cos(enemyAngle - pathAngle)));
-                                            if (angleDiff < 0.38) {
+                                            if (angleDiff < 0.30) {
                                                 isPathSafe = false;
                                                 break;
                                             }
@@ -1170,11 +1181,11 @@ def _run_snake_bot_impl(max_runs=3, headless=False):
                                     }
                                 }
 
-                                // Далекобійний магніт: зберігаємо достатню тягу (0.58) навіть при непрямій перешкоді, якщо ворог не впритул
+                                // Далекобійний магніт: підвищено cappedMass до 420 для сильнішого захвату великих трупів
                                 if (bestCluster && bestCluster.dist > 45 && (!blockSteeringOnUnsafe || isPathSafe)) {
                                     var cDist = bestCluster.dist;
-                                    var cappedMass = Math.min(bestCluster.mass, 260);
-                                    var safetyDamp = isPathSafe ? (minEnemyDist < 140 ? 0.85 : 1.45) : (minEnemyDist > 165 ? 0.58 : 0.28);
+                                    var cappedMass = Math.min(bestCluster.mass, 420);
+                                    var safetyDamp = isPathSafe ? (minEnemyDist < 135 ? 0.90 : 1.55) : (minEnemyDist > 160 ? 0.65 : 0.30);
                                     var cForce = (cappedMass / (cDist * (110.0 + 0.32 * cDist))) * safetyDamp;
                                     clusterFx = ((bestCluster.x - hx) / cDist) * cForce;
                                     clusterFy = ((bestCluster.y - hy) / cDist) * cForce;
@@ -1205,12 +1216,12 @@ def _run_snake_bot_impl(max_runs=3, headless=False):
                                 var foodWeight = 1.0;
                                 var clusterWeight = 2.0;
                                 if (phase === 3) {
-                                    // Динамічне підсилення живлення 2.05..2.60 пропорційно росту decay (13-20 mass/s)
-                                    foodWeight = 2.05 + Math.min(0.55, Math.max(0, meMass - 1600) * 0.0007);
-                                    clusterWeight = 3.5;
+                                    // Динамічне підсилення живлення 2.35..2.95 пропорційно росту decay (13-22 mass/s)
+                                    foodWeight = 2.35 + Math.min(0.60, Math.max(0, meMass - 1600) * 0.0008);
+                                    clusterWeight = 3.8;
                                 } else if (phase === 2) {
-                                    foodWeight = 1.25;
-                                    clusterWeight = 2.7;
+                                    foodWeight = 1.35;
+                                    clusterWeight = 2.9;
                                 }
 
                                 // Гасимо тягу до їжі ТІЛЬКИ в екстреній зоні < 95px (щоб не знижувати foodWeight до 0.96 у трафіку)
@@ -1248,8 +1259,8 @@ def _run_snake_bot_impl(max_runs=3, headless=False):
                                     for (var i = 0; i < rayDists.length; i++) {
                                         var d = rayDists[i];
                                         var danger = rayDists.length - i; // 4=впритул, 3=близько, 2=середньо, 1=далеко
-                                        // 5 променів (±24°) на ближній дистанції (i<=1), 3 промені (±11.5°) на середній (i==2) і 1 на дальній (i==3)
-                                        var spread = (i <= 1) ? [-0.42, -0.21, 0, 0.21, 0.42] : ((i === 2) ? [-0.20, 0, 0.20] : [0]);
+                                        // v3.4.2: повернено вуса [-0.15, 0, 0.15] на i==3, щоб бачити діагональних бустерів на 200-250px
+                                        var spread = (i <= 1) ? [-0.42, -0.21, 0, 0.21, 0.42] : ((i === 2) ? [-0.22, 0, 0.22] : [-0.15, 0, 0.15]);
                                         for (var sIdx = 0; sIdx < spread.length; sIdx++) {
                                             var a = angle + spread[sIdx];
                                             var px = hx + Math.cos(a) * d;
@@ -1279,7 +1290,8 @@ def _run_snake_bot_impl(max_runs=3, headless=False):
 
                                 var nowMs = Date.now();
                                 if (window.__evadeLockUntil && nowMs < window.__evadeLockUntil && window.__evadeLockAngle !== undefined) {
-                                    if (checkRaySafety(window.__evadeLockAngle) <= 1) {
+                                    var lockDanger = checkRaySafety(window.__evadeLockAngle);
+                                    if (lockDanger <= 1 || (minEnemyDist < 140 && lockDanger <= 2)) {
                                         targetAngle = window.__evadeLockAngle;
                                     }
                                 }
@@ -1301,8 +1313,8 @@ def _run_snake_bot_impl(max_runs=3, headless=False):
                                         var testAngle = currentHeading + delta;
                                         var dScore = checkRaySafety(testAngle);
                                         var angleDiff = Math.abs(Math.atan2(Math.sin(testAngle - targetAngle), Math.cos(testAngle - targetAngle)));
-                                        // Жорсткий штраф +3.2 за зміну напрямку розвороту, щоб унеможливити метання вправо->вліво перед носом ворога
-                                        var flipPenalty = (prevSign !== 0 && delta !== 0 && Math.sign(delta) !== prevSign) ? 3.2 : 0.0;
+                                        // v3.4.2: штраф 8.8 (> 7.0*1) при близькому ворогові блокує смертельні реверси вліво<->вправо
+                                        var flipPenalty = (prevSign !== 0 && delta !== 0 && Math.sign(delta) !== prevSign) ? (minEnemyDist < 165 ? 8.8 : 4.5) : 0.0;
                                         // Біля краю арени штрафуємо розвороти назовні від центру, щоб завжди ухилятися всередину карти
                                         var outCos = (distFromCenter > safeRadius - 120) ? ((hx * Math.cos(testAngle) + hy * Math.sin(testAngle)) / (distFromCenter || 1)) : -1.0;
                                         var wallPenalty = (outCos > 0) ? (3.5 * outCos) : 0.0;
@@ -1336,11 +1348,11 @@ def _run_snake_bot_impl(max_runs=3, headless=False):
                                 // - Відстань до кластера > 40px (ще не досягли)
                                 // - Безпечна відстань від краю арени
                                 var minMassForBoost = window.__minMassForBoost || 350;
-                                // Бустимо тільки коли край кластера ближче 140px (щоб за 0.50с прольоту 170px гарантовано з'їсти ядро кластера в плюс)
-                                var minClusterForBoost = (meMass >= 1700) ? 145 : ((meMass >= 1100) ? 80 : ((meMass >= 650) ? 45 : 28));
+                                // v3.5: знижено поріг кластера на масі >=1700 до 115 і розширено захват краю до 165px для швидшого фарму
+                                var minClusterForBoost = (meMass >= 1700) ? 115 : ((meMass >= 1100) ? 70 : ((meMass >= 650) ? 42 : 26));
                                 var safeEnemyDistForBoost = Math.max(220, Math.min(260, 185 + meMass * 0.035));
-                                var maxBoostDist = (bestCluster && bestCluster.mass >= 240) ? 175 : 150;
-                                var nearEdgeOk = Boolean(bestCluster && (bestCluster.nearestDist || bestCluster.dist) <= 140);
+                                var maxBoostDist = (bestCluster && bestCluster.mass >= 220) ? 205 : 170;
+                                var nearEdgeOk = Boolean(bestCluster && (bestCluster.nearestDist || bestCluster.dist) <= 165);
                                 var clusterAlignCos = bestCluster ? Math.cos(Math.atan2(bestCluster.y - hy, bestCluster.x - hx) - currentHeading) : -1.0;
                                 var boostCandidate = Boolean(
                                     bestCluster &&
@@ -1389,6 +1401,7 @@ def _run_snake_bot_impl(max_runs=3, headless=False):
 
                         if decision:
                             me_mass = float(decision.get("mass") or 0)
+                            prev_score = score_earned
                             val = decision.get("coins") or "0"
                             clean_score = "".join([c for c in str(val) if c.isdigit()])
                             if clean_score:
@@ -1401,6 +1414,7 @@ def _run_snake_bot_impl(max_runs=3, headless=False):
                                 if current_kills_int > kills_earned:
                                     kill_delta = current_kills_int - kills_earned
                                     kills_earned = current_kills_int
+                                    kill_coins_est += max(0, score_earned - prev_score)
                                     alive_t = int(time.time() - start_time)
                                     print(f"[BOT] ⚔️ ВБИТО ЗМІЮ! Kills: {kills_earned} (+{kill_delta}) | Маса: {me_mass:.0f} | Монети: {score_earned} (Час: {alive_t}с)")
 
@@ -1498,7 +1512,7 @@ def _run_snake_bot_impl(max_runs=3, headless=False):
                                 stop_reason = None
                                 if time_boosting >= 0.50:
                                     stop_reason = "таймаут імпульсу 0.50с"
-                                elif raycast_danger >= 3 or min_enemy_dist < 175:
+                                elif raycast_danger >= 3 or min_enemy_dist < 195:
                                     stop_reason = f"наближення ворога ({min_enemy_dist:.0f}px)"
                                 elif dist_center > safe_radius:
                                     stop_reason = "наближення до стіни арени"
@@ -1509,9 +1523,12 @@ def _run_snake_bot_impl(max_runs=3, headless=False):
 
                                 if stop_reason:
                                     mass_diff = me_mass - boost_start_mass
+                                    boost_net_mass += mass_diff
                                     if mass_diff > 0:
+                                        boost_win_count += 1
                                         print(f"[BOT] 💰 BOOST ОКУПИВСЯ: +{mass_diff:.0f} маси (імпульс {time_boosting:.2f}с)")
                                     else:
+                                        boost_loss_count += 1
                                         print(f"[BOT] 📉 BOOST В МІНУС: {mass_diff:.0f} маси (імпульс {time_boosting:.2f}с)")
                                     
                                     if not DRY_RUN:
@@ -1568,6 +1585,7 @@ def _run_snake_bot_impl(max_runs=3, headless=False):
                         break
 
                     ticks += 1
+                    mass_sum_accum += me_mass
                     phase_val = decision.get("phase", 1) if decision else 1
                     
                     if phase_val != last_phase:
@@ -1581,6 +1599,7 @@ def _run_snake_bot_impl(max_runs=3, headless=False):
                     if time.time() - last_mass_time > 10:
                         mass_loss = last_mass_val - me_mass
                         if mass_loss > 100 and last_mass_val > 0:
+                            starvation_events += 1
                             print(f"[BOT] ⏳ ГОЛОДУВАННЯ: спад маси {last_mass_val:.0f} ➔ {me_mass:.0f} за 10с (-{mass_loss/10:.1f} mass/s)")
                         last_mass_val = me_mass
                         last_mass_time = time.time()
@@ -1616,8 +1635,10 @@ def _run_snake_bot_impl(max_runs=3, headless=False):
                     boost_active = False
 
                 duration_sec = int(time.time() - start_time)
+                avg_run_mass = (mass_sum_accum / ticks) if ticks > 0 else 0.0
                 print(f"[BOT] Забіг #{run_idx} тривав {duration_sec} сек.")
                 print(f"      Очки: +{score_earned} | З'їдено змій: {kills_earned} | Активацій boost: {boost_triggers_count} | Raycast ухилень: {raycast_panics_count} | isPathSafe блоковано (boost/steering): {path_safe_blocked_count}/{path_safe_steering_blocked_count} | coreFx активностей: {core_fx_activations} | Макс. кластер: {max_cluster_seen:.0f}")
+                print(f"      [TELEMETRY] Середня маса: {avg_run_mass:.0f} | Темп: {score_earned / max(1, duration_sec):.2f} монет/с | Kill-монети (миттєві): +{kill_coins_est} | Boost (+/-): {boost_win_count}/{boost_loss_count} (net {boost_net_mass:+.0f} маси) | Голодувань: {starvation_events}")
 
                 # 8. Пауза 6 секунд, щоб екран смерті #cs-dead та сервер повністю синхронізувалися
                 print("[BOT] Очікуємо синхронізацію результату із сервером (6 сек)...")
