@@ -578,7 +578,8 @@ def _run_snake_bot_impl(max_runs=3, headless=False):
     sb_kwargs = dict(
         uc=True,
         headless=headless,
-        binary_location=binary
+        binary_location=binary,
+        chromium_arg="--disable-background-timer-throttling,--disable-backgrounding-occluded-windows,--disable-renderer-backgrounding"
     )
 
     proxy_ext_dir = None
@@ -981,6 +982,7 @@ def _run_snake_bot_impl(max_runs=3, headless=False):
                                 var hx = me.pts[0];
                                 var hy = me.pts[1];
                                 var myGuild = me.guild || 'near';
+                                var meShielded = (me.shield || 0) > 0.15;
                                 var meR = me.r || (10 + Math.min(26, 0.9 * Math.sqrt(meMass)));
                                 var headingX = (me.pts.length >= 4) ? (hx - me.pts[2]) : Math.cos(me.ang || 0);
                                 var headingY = (me.pts.length >= 4) ? (hy - me.pts[3]) : Math.sin(me.ang || 0);
@@ -1131,8 +1133,8 @@ def _run_snake_bot_impl(max_runs=3, headless=False):
                                 var pathSafeSteeringBlocked = Boolean(bestCluster && bestCluster.dist > 1 && !isPathSafe);
                                 var blockSteeringOnUnsafe = Boolean(window.__blockSteeringOnUnsafe) && meMass > 400;
 
-                                // 3. Ухилення від ворожих змій (підвищений буфер 230px на спавні < 220 маси)
-                                var avoidRadius = (meMass < 220) ? 230 : Math.max(205, Math.min(255, 180 + meMass * 0.04));
+                                // 3. Ухилення від ворожих змій (під час спавн-щита meShielded знижуємо радіус до 140px для спокійного старту)
+                                var avoidRadius = meShielded ? 140 : ((meMass < 220) ? 230 : Math.max(205, Math.min(255, 180 + meMass * 0.04)));
                                 var avoidFx = 0;
                                 var avoidFy = 0;
                                 var minEnemyDist = 9999;
@@ -1317,9 +1319,9 @@ def _run_snake_bot_impl(max_runs=3, headless=False):
                                 var raycastDeltaDeg = 0;
                                 var raycastDanger = Math.max(primaryDanger, headingDanger);
                                 // Не тригеримо фальшивий evade lv.0, коли ворог позаду, а всі промені попереду чисті (raycastDanger === 0)
-                                var closeEmergency = (minEnemyDist < 92 && raycastDanger >= 1);
-                                // Hard Evade v3.6.1: minK від headingDanger (без спірального закручування) + Hard Flip-Lock при minEnemyDist < 150
-                                if (primaryDanger >= 2 || headingDanger >= 3 || closeEmergency) {
+                                var closeEmergency = (!meShielded && minEnemyDist < 95 && raycastDanger >= 1);
+                                // Hard Evade v3.6.2: minK=3 при closeEmergency && headingDanger>=1 (захист спавну) + prevSideViable <= 1
+                                if (!meShielded && (primaryDanger >= 2 || headingDanger >= 3 || closeEmergency)) {
                                     var steps = [0.0, 0.28, 0.55, 0.82, 1.12, 1.45, 1.75];
                                     var sPos = [];
                                     var sNeg = [];
@@ -1328,16 +1330,16 @@ def _run_snake_bot_impl(max_runs=3, headless=False):
                                         sPos.push(checkRaySafety(currentHeading + st));
                                         sNeg.push(kIdx === 0 ? sPos[0] : checkRaySafety(currentHeading - st));
                                     }
-                                    // minK залежить ТІЛЬКИ від загрози прямо перед фізичною головою (headingDanger), щоб після відвороту змійка могла летіти прямо (k=0)
-                                    var minK = (headingDanger >= 4 || (closeEmergency && headingDanger >= 2)) ? 3 : ((headingDanger === 3) ? 2 : 0);
+                                    // minK залежить ТІЛЬКИ від headingDanger: якщо ворог близько і чіпляє хоча б дальній промінь носа (headingDanger >= 1) -> minK = 3 (від 47°)
+                                    var minK = (headingDanger >= 4 || (closeEmergency && headingDanger >= 1)) ? 3 : ((headingDanger === 3) ? 2 : ((headingDanger === 2) ? 1 : 0));
                                     var minTargetSep = (primaryDanger >= 4) ? 0.78 : ((primaryDanger === 3) ? 0.52 : 0.0);
                                     var prevSign = (window.__lastEvadeTime && (nowMs - window.__lastEvadeTime < 2400)) ? (window.__lastEvadeSign || 0) : 0;
-                                    // Перевіряємо, чи має сторона prevSign хоча б один безпечний кут (dScore <= 2)
+                                    // Блокуємо протилежну сторону через continue ТІЛЬКИ коли сторона prevSign має дійсно чистий прохід (dScore <= 1)
                                     var prevSideViable = false;
                                     if (prevSign !== 0) {
                                         var pArr = (prevSign === 1) ? sPos : sNeg;
                                         for (var pk = Math.max(1, minK); pk < steps.length; pk++) {
-                                            if (pArr[pk] <= 2) {
+                                            if (pArr[pk] <= 1) {
                                                 prevSideViable = true;
                                                 break;
                                             }
@@ -1701,10 +1703,14 @@ def _run_snake_bot_impl(max_runs=3, headless=False):
 
                 # 8. Пауза 6 секунд, щоб екран смерті #cs-dead та сервер повністю синхронізувалися
                 print("[BOT] Очікуємо синхронізацію результату із сервером (6 сек)...")
-                sb.sleep(6)
+                try:
+                    sb.sleep(6)
+                except Exception:
+                    pass
 
-                # 9. Зчитуємо реальні дані з екрана смерті, localStorage та рейтингу
-                stats = safe_eval(sb, """
+                # 9. Зчитуємо реальні дані з екрана смерті, localStorage та рейтингу (із захистом від закритого вікна)
+                try:
+                    stats = safe_eval(sb, """
                     return (() => {
                         var deadCoins = document.querySelector('#cs-d-coins')?.innerText;
                         var deadKills = document.querySelector('#cs-d-kills')?.innerText;
@@ -1839,7 +1845,10 @@ def _run_snake_bot_impl(max_runs=3, headless=False):
                             }
                         };
                     })()
-                """) or {}
+                    """) or {}
+                except Exception as e_stats:
+                    print(f"[BOT] ⚠️ Вікно браузера недоступне для зчитування фінальної таблиці ({e_stats}). Формуємо звіт із телеметрії раунду.")
+                    stats = {}
 
                 # Якщо екран смерті містить верифіковану кількість монет, беремо її
                 dead_data = stats.get("dead") or {}
