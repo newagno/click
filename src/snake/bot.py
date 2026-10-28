@@ -1291,7 +1291,7 @@ def _run_snake_bot_impl(max_runs=3, headless=False):
                                 var nowMs = Date.now();
                                 if (window.__evadeLockUntil && nowMs < window.__evadeLockUntil && window.__evadeLockAngle !== undefined) {
                                     var lockDanger = checkRaySafety(window.__evadeLockAngle);
-                                    if (lockDanger <= 1 || (minEnemyDist < 140 && lockDanger <= 2)) {
+                                    if (lockDanger <= 1 || (minEnemyDist < 155 && lockDanger <= 2)) {
                                         targetAngle = window.__evadeLockAngle;
                                     }
                                 }
@@ -1302,27 +1302,53 @@ def _run_snake_bot_impl(max_runs=3, headless=False):
                                 var raycastDeltaDeg = 0;
                                 var raycastDanger = Math.max(primaryDanger, headingDanger);
                                 // Не тригеримо фальшивий evade lv.0, коли ворог позаду, а всі промені попереду чисті (raycastDanger === 0)
-                                var closeEmergency = (minEnemyDist < 88 && raycastDanger >= 1);
-                                // Hard Evade: перехоплюємо кермо при загрозі на променях або при критичному зближенні спереду/збоку
+                                var closeEmergency = (minEnemyDist < 92 && raycastDanger >= 1);
+                                // Hard Evade: секторний вибір курсу з урахуванням сусідніх променів (buffer) та дуги повороту (sweepSum)
                                 if (primaryDanger >= 2 || headingDanger >= 3 || closeEmergency) {
-                                    var candidateDeltas = [0, 0.28, -0.28, 0.55, -0.55, 0.82, -0.82, 1.12, -1.12, 1.45, -1.45, 1.75, -1.75];
+                                    var steps = [0.0, 0.28, 0.55, 0.82, 1.12, 1.45, 1.75];
+                                    var sPos = [];
+                                    var sNeg = [];
+                                    for (var kIdx = 0; kIdx < steps.length; kIdx++) {
+                                        var st = steps[kIdx];
+                                        sPos.push(checkRaySafety(currentHeading + st));
+                                        sNeg.push(kIdx === 0 ? sPos[0] : checkRaySafety(currentHeading - st));
+                                    }
                                     var minCost = 999999;
                                     var safestAngle = targetAngle;
-                                    var prevSign = (window.__lastEvadeTime && (nowMs - window.__lastEvadeTime < 1400)) ? (window.__lastEvadeSign || 0) : 0;
-                                    for (var delta of candidateDeltas) {
-                                        var testAngle = currentHeading + delta;
-                                        var dScore = checkRaySafety(testAngle);
-                                        var angleDiff = Math.abs(Math.atan2(Math.sin(testAngle - targetAngle), Math.cos(testAngle - targetAngle)));
-                                        // v3.4.2: штраф 8.8 (> 7.0*1) при близькому ворогові блокує смертельні реверси вліво<->вправо
-                                        var flipPenalty = (prevSign !== 0 && delta !== 0 && Math.sign(delta) !== prevSign) ? (minEnemyDist < 165 ? 8.8 : 4.5) : 0.0;
-                                        // Біля краю арени штрафуємо розвороти назовні від центру, щоб завжди ухилятися всередину карти
-                                        var outCos = (distFromCenter > safeRadius - 120) ? ((hx * Math.cos(testAngle) + hy * Math.sin(testAngle)) / (distFromCenter || 1)) : -1.0;
-                                        var wallPenalty = (outCos > 0) ? (3.5 * outCos) : 0.0;
-                                        var goalWeight = (closeEmergency || raycastDanger >= 3) ? 0.25 : 1.0;
-                                        var cost = 7.0 * dScore + goalWeight * angleDiff + 0.22 * Math.abs(delta) + flipPenalty + wallPenalty;
-                                        if (cost < minCost) {
-                                            minCost = cost;
-                                            safestAngle = testAngle;
+                                    var prevSign = (window.__lastEvadeTime && (nowMs - window.__lastEvadeTime < 2200)) ? (window.__lastEvadeSign || 0) : 0;
+                                    var sides = [1, -1];
+                                    for (var sideIdx = 0; sideIdx < sides.length; sideIdx++) {
+                                        var sign = sides[sideIdx];
+                                        var sArr = (sign === 1) ? sPos : sNeg;
+                                        var sweepSum = 0;
+                                        for (var k = 0; k < steps.length; k++) {
+                                            if (sign === -1 && k === 0) continue;
+                                            var mag = steps[k];
+                                            var delta = sign * mag;
+                                            var testAngle = currentHeading + delta;
+                                            var dScore = sArr[k];
+                                            var innerScore = (k >= 1) ? sArr[k - 1] : dScore;
+                                            var outerScore = sArr[Math.min(6, k + 1)];
+                                            if (k >= 2) sweepSum += sArr[k - 1];
+                                            // Ефективна небезпека: штрафує кути впритул до перешкоди (innerScore) та поворот крізь тіло ворога (sweepSum)
+                                            var effDanger = dScore + 0.40 * innerScore + 0.18 * outerScore + 0.22 * sweepSum;
+                                            // Заборона слабких підрулювань (16°/32°) при близькій загрозі lv.3 / lv.4
+                                            var minTurnPen = 0.0;
+                                            if ((raycastDanger >= 4 || closeEmergency) && k < 3) {
+                                                minTurnPen = 3.5 * (3 - k);
+                                            } else if (raycastDanger === 3 && k < 2) {
+                                                minTurnPen = 2.5 * (2 - k);
+                                            }
+                                            var angleDiff = Math.abs(Math.atan2(Math.sin(testAngle - targetAngle), Math.cos(testAngle - targetAngle)));
+                                            var flipPenalty = (prevSign !== 0 && delta !== 0 && sign !== prevSign) ? (minEnemyDist < 185 ? 12.5 : 5.5) : 0.0;
+                                            var outCos = (distFromCenter > safeRadius - 120) ? ((hx * Math.cos(testAngle) + hy * Math.sin(testAngle)) / (distFromCenter || 1)) : -1.0;
+                                            var wallPenalty = (outCos > 0) ? (3.5 * outCos) : 0.0;
+                                            var goalWeight = (closeEmergency || raycastDanger >= 3) ? 0.20 : 0.90;
+                                            var cost = 7.0 * effDanger + minTurnPen + goalWeight * angleDiff + 0.18 * mag + flipPenalty + wallPenalty;
+                                            if (cost < minCost) {
+                                                minCost = cost;
+                                                safestAngle = testAngle;
+                                            }
                                         }
                                     }
                                     var rawDiff = Math.atan2(Math.sin(safestAngle - currentHeading), Math.cos(safestAngle - currentHeading));
@@ -1333,7 +1359,7 @@ def _run_snake_bot_impl(max_runs=3, headless=False):
                                         raycastPanicked = true;
                                         raycastDeltaDeg = Math.round(clampedDiff * 180 / Math.PI);
                                         window.__evadeLockAngle = safestAngle;
-                                        window.__evadeLockUntil = nowMs + 420;
+                                        window.__evadeLockUntil = nowMs + 480;
                                         window.__lastEvadeSign = Math.sign(clampedDiff);
                                         window.__lastEvadeTime = nowMs;
                                     }
