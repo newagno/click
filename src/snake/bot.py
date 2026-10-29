@@ -710,7 +710,7 @@ def _run_snake_bot_impl(max_runs=3, headless=False):
                             window.__radarHooked = true;
                         }
 
-                        // 4. Надійна імунізація CryptoSnakeVerifiedRun (без заміни class.prototype)
+                        // 4. Надійна імунізація CryptoSnakeVerifiedRun (прогресивний таймаут + wake-up сокета + захист від invalid при мережевих лагах)
                         if (window.CryptoSnakeVerifiedRun && window.CryptoSnakeVerifiedRun.prototype && !window.__verifyHooked) {
                             const proto = window.CryptoSnakeVerifiedRun.prototype;
                             const origStart = proto.start;
@@ -731,23 +731,35 @@ def _run_snake_bot_impl(max_runs=3, headless=False):
                                 return { ok: true };
                             };
 
-                            // Таймаут 12с (замість 8с та 45с) + швидкий ретрай 1.5с: встигаємо зробити до 3 спроб у межах 60-секундного TTL сервера!
+                            // Прямий fetch з cache: 'no-store', прогресивним таймаутом (18с -> 24с -> 30с) та обходом завислих HTTP/2-сокетів
                             proto.request = async function(action, payload) {
                                 if (action === 'abandon') {
                                     return { ok: true };
                                 }
                                 let lastErr;
-                                for (let attempt = 0; attempt < 5; attempt++) {
+                                const timeouts = [18000, 24000, 30000, 30000, 30000];
+                                for (let attempt = 0; attempt < timeouts.length; attempt++) {
                                     const controller = new AbortController();
+                                    const tLimit = timeouts[attempt];
                                     let timer;
                                     try {
+                                        if (attempt > 0) {
+                                            // Пробуджуємо HTTP/2-пул свіжим запитом з cache-buster перед ретраєм
+                                            try {
+                                                await fetch(location.pathname + '?_wake=' + Date.now() + '_' + attempt, {
+                                                    method: 'HEAD',
+                                                    cache: 'no-store',
+                                                    credentials: 'same-origin'
+                                                });
+                                            } catch (eWake) {}
+                                        }
                                         return await Promise.race([
                                             this.post(action, payload, controller.signal),
                                             new Promise((_, reject) => {
                                                 timer = setTimeout(() => {
                                                     controller.abort();
-                                                    reject(new Error('timeout_12s'));
-                                                }, 12000);
+                                                    reject(new Error('timeout_' + (tLimit / 1000) + 's'));
+                                                }, tLimit);
                                             })
                                         ]);
                                     } catch (err) {
@@ -755,7 +767,7 @@ def _run_snake_bot_impl(max_runs=3, headless=False):
                                         const errCode = String((err && (err.code || err.message)) || '');
                                         const errStatus = (err && err.status) || 0;
                                         window.__lastVerifyError = `${action}#${payload && payload.seq}:${errCode || errStatus || err} (try ${attempt + 1})`;
-                                        if (errCode === 'season_ended' || errCode === 'run_closed') throw err;
+                                        if (errCode === 'season_ended' || errCode === 'run_closed' || errCode === 'account_suspicious') throw err;
                                         if (errCode === 'checkpoint_sequence' && attempt >= 1) throw err;
                                         await new Promise(r => setTimeout(r, 1500 + attempt * 1000));
                                     } finally {
@@ -763,6 +775,30 @@ def _run_snake_bot_impl(max_runs=3, headless=False):
                                     }
                                 }
                                 throw lastErr;
+                            };
+
+                            // Захист send('checkpoint'): якщо всі спроби впали через тимчасовий timeout/5xx (а не фатальний run_closed),
+                            // НЕ виставляємо this.invalid = true і НЕ зупиняємо таймер — наступний чекпоінт через 10с продовжить серію!
+                            const origSend = proto.send;
+                            proto.send = async function(action, stats, motion) {
+                                try {
+                                    return await origSend.call(this, action, stats, motion);
+                                } catch (err) {
+                                    const errCode = String((err && (err.code || err.message)) || '');
+                                    const isFatal = (
+                                        errCode === 'run_closed' ||
+                                        errCode === 'season_ended' ||
+                                        errCode === 'account_suspicious' ||
+                                        errCode === 'checkpoint_sequence' ||
+                                        errCode === 'bad_checkpoint_response' ||
+                                        (err && (err.status === 401 || err.status === 403))
+                                    );
+                                    if (action === 'checkpoint' && !isFatal) {
+                                        console.warn('[IMMUNITY] Soft checkpoint error ignored to keep run alive:', errCode);
+                                        return { seq: this.seq, checkpoint: this.checkpoint };
+                                    }
+                                    throw err;
+                                }
                             };
 
                             window.__verifyHooked = true;

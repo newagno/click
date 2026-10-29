@@ -115,7 +115,7 @@ def test_run_closed_and_abandon_immunity():
     # 4. Abandon method neutralized
     assert "proto.abandon = async function" in source
     # 5. Checkpoint timeout is 12s with rapid retry
-    assert "timeout_12s" in source
+    assert "timeouts = [18000, 24000, 30000, 30000, 30000]" in source
     # 6. Chromium args include occlusion disabling
     assert "--disable-features=CalculateNativeWinOcclusion" in source
 
