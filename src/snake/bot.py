@@ -580,7 +580,7 @@ def _run_snake_bot_impl(max_runs=3, headless=False):
         uc=True,
         headless=headless,
         binary_location=binary,
-        chromium_arg="--disable-background-timer-throttling,--disable-backgrounding-occluded-windows,--disable-renderer-backgrounding"
+        chromium_arg="--disable-background-timer-throttling,--disable-backgrounding-occluded-windows,--disable-renderer-backgrounding,--disable-features=CalculateNativeWinOcclusion"
     )
 
     proxy_ext_dir = None
@@ -667,24 +667,87 @@ def _run_snake_bot_impl(max_runs=3, headless=False):
             def ensure_radar_injected():
                 return safe_eval(sb, """
                     return (() => {
-                        if (!window.CryptoSnakeCore || !window.CryptoSnakeCore.World) return 'NO_CORE';
-                        if (window.__radarHooked) return 'ALREADY_OK';
-                        const origStep = window.CryptoSnakeCore.World.prototype.step;
-                        window.CryptoSnakeCore.World.prototype.step = function(...args) {
-                            window.__activeWorld = this;
-                            return origStep.apply(this, args);
-                        };
-                        const origAddSnake = window.CryptoSnakeCore.World.prototype.addSnake;
-                        window.CryptoSnakeCore.World.prototype.addSnake = function(opts) {
-                            const s = origAddSnake.apply(this, arguments);
-                            if (opts && !opts.bot) {
-                                window.__mySnakeId = s.id;
-                            }
-                            return s;
-                        };
-                        // Повна заміна request() із таймаутом 45с замість рідних 8с (усуває обрив in-flight запитів і помилку checkpoint_sequence)
+                        // 1. Блокуємо аварійні маяки abandon через navigator.sendBeacon
+                        if (window.navigator && !window.__beaconHooked) {
+                            const origSendBeacon = window.navigator.sendBeacon ? window.navigator.sendBeacon.bind(window.navigator) : null;
+                            window.navigator.sendBeacon = function(url, data) {
+                                const u = String(url || '');
+                                if (u.includes('abandon') || u.includes('a=abandon') || u.includes('action=abandon')) {
+                                    console.warn('[IMMUNITY] Blocked navigator.sendBeacon abandon:', u);
+                                    return true;
+                                }
+                                return origSendBeacon ? origSendBeacon(url, data) : true;
+                            };
+                            window.__beaconHooked = true;
+                        }
+
+                        // 2. Блокуємо реєстрацію pagehide на window (щоб згортання/оклузія вікна не тригерила onHide/abandon)
+                        if (!window.__pagehideHooked) {
+                            const origAddEvt = window.addEventListener.bind(window);
+                            window.addEventListener = function(type, listener, options) {
+                                if (type === 'pagehide') {
+                                    console.warn('[IMMUNITY] Blocked window.addEventListener("pagehide")');
+                                    return;
+                                }
+                                return origAddEvt(type, listener, options);
+                            };
+                            window.__pagehideHooked = true;
+                        }
+
+                        // 3. Радарний перехоплювач World
+                        if (window.CryptoSnakeCore && window.CryptoSnakeCore.World && !window.__radarHooked) {
+                            const origStep = window.CryptoSnakeCore.World.prototype.step;
+                            window.CryptoSnakeCore.World.prototype.step = function(...args) {
+                                window.__activeWorld = this;
+                                return origStep.apply(this, args);
+                            };
+                            const origAddSnake = window.CryptoSnakeCore.World.prototype.addSnake;
+                            window.CryptoSnakeCore.World.prototype.addSnake = function(opts) {
+                                const s = origAddSnake.apply(this, arguments);
+                                if (opts && !opts.bot) {
+                                    window.__mySnakeId = s.id;
+                                }
+                                return s;
+                            };
+                            window.__radarHooked = true;
+                        }
+
+                        // 4. Повна імунізація CryptoSnakeVerifiedRun від передчасного run_closed
                         if (window.CryptoSnakeVerifiedRun && window.CryptoSnakeVerifiedRun.prototype && !window.__verifyHooked) {
+                            const OrigVerifiedRun = window.CryptoSnakeVerifiedRun;
+
+                            // a) Підміна конструктора: знешкоджуємо onAbandon та нейтралізуємо onHide
+                            window.CryptoSnakeVerifiedRun = class extends OrigVerifiedRun {
+                                constructor(post, runData, options) {
+                                    const safeOptions = Object.assign({}, options, {
+                                        onAbandon: (runId) => {
+                                            console.warn('[IMMUNITY] Blocked options.onAbandon callback for run:', runId);
+                                        }
+                                    });
+                                    super(post, runData, safeOptions);
+                                    window.__activeVerifiedRun = this;
+                                    if (this.onHide) {
+                                        window.removeEventListener('pagehide', this.onHide);
+                                        this.onHide = () => {
+                                            console.warn('[IMMUNITY] Defused onHide call ignored');
+                                        };
+                                    }
+                                }
+                            };
+                            window.CryptoSnakeVerifiedRun.prototype = OrigVerifiedRun.prototype;
+
+                            // b) Повне знешкодження методу abandon()
+                            window.CryptoSnakeVerifiedRun.prototype.abandon = async function() {
+                                console.warn('[IMMUNITY] Neutralized verifiedRun.abandon() call — run preserved');
+                                return { ok: true };
+                            };
+
+                            // c) Заміна request(): таймаут 45с замість 8с + відхилення запитів abandon
                             window.CryptoSnakeVerifiedRun.prototype.request = async function(action, payload) {
+                                if (action === 'abandon') {
+                                    console.warn('[IMMUNITY] Neutralized verifiedRun.request("abandon")');
+                                    return { ok: true };
+                                }
                                 let lastErr;
                                 for (let attempt = 0; attempt < 8; attempt++) {
                                     const controller = new AbortController();
@@ -713,9 +776,40 @@ def _run_snake_bot_impl(max_runs=3, headless=False):
                                 }
                                 throw lastErr;
                             };
+
+                            // d) Захист finish(): ніколи не скидати забіг в abandon при смерті!
+                            window.CryptoSnakeVerifiedRun.prototype.finish = async function(stats) {
+                                this.closing = true;
+                                this.stop();
+                                if (this.motion && typeof this.motion.begin === 'function') {
+                                    this.motion.begin();
+                                }
+                                const motionEnd = (this.motion && typeof this.motion.end === 'function')
+                                    ? this.motion.end()
+                                    : ((this.motion && typeof this.motion.snapshot === 'function') ? this.motion.snapshot() : []);
+                                try {
+                                    await this.pending;
+                                } catch (e) {
+                                    console.warn('[IMMUNITY] Pending checkpoint caught error before finish:', e);
+                                }
+                                try {
+                                    const res = await this.send("finish", stats, motionEnd);
+                                    console.log('[IMMUNITY] VerifiedRun finish success:', res);
+                                    return res;
+                                } catch (err) {
+                                    console.error('[IMMUNITY] VerifiedRun finish error:', err);
+                                    return {
+                                        recorded: false,
+                                        reason: (err && err.status === 401) ? "auth" : ((err && err.message === "season_ended") ? "season_ended" : "verification")
+                                    };
+                                }
+                            };
+
                             window.__verifyHooked = true;
                         }
-                        window.__radarHooked = true;
+
+                        if (!window.__radarHooked) return 'WAITING_RADAR';
+                        if (!window.__verifyHooked) return 'WAITING_VERIFY';
                         return 'OK';
                     })()
                 """)
@@ -1515,7 +1609,24 @@ def _run_snake_bot_impl(max_runs=3, headless=False):
                             if decision.get("run_unverified") and not DRY_RUN:
                                 alive_t = int(time.time() - start_time)
                                 v_err = decision.get("verify_err") or "невідома помилка чекпоінта"
-                                print(f"\n[BOT] 🚨 УВАГА: Помічено банер '#cs-run-warning' на {alive_t}с (помилка: {v_err})! Забіг втратив верифікацію — негайно перезапускаємо!")
+                                print(f"\n[BOT] 🚨 УВАГА: Помічено банер '#cs-run-warning' на {alive_t}с (помилка: {v_err})! Скеровуємо змійку на вихід для коректного збереження очок...")
+                                suicide_angle = safe_eval(sb, """
+                                    var w = window.__activeWorld;
+                                    var me = w && window.__mySnakeId !== undefined ? w.snakes.get(window.__mySnakeId) : null;
+                                    return (me && me.pts) ? Math.atan2(me.pts[1], me.pts[0]) : 0.0;
+                                """)
+                                if suicide_angle is not None:
+                                    mx = int(cx + 160 * math.cos(suicide_angle))
+                                    my = int(cy + 160 * math.sin(suicide_angle))
+                                    try:
+                                        sb.driver.execute_cdp_cmd("Input.dispatchMouseEvent", {"type": "mouseMoved", "x": mx, "y": my})
+                                    except Exception:
+                                        pass
+                                for _ in range(30):
+                                    sb.sleep(0.2)
+                                    dead_now = safe_eval(sb, "var d = document.querySelector('#cs-dead'); return Boolean(d && !d.hidden && d.style.display !== 'none');")
+                                    if dead_now:
+                                        break
                                 break
 
                             if decision.get("is_dead"):

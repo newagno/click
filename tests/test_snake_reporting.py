@@ -100,3 +100,21 @@ def test_dead_score_does_not_overwrite_higher_telemetry():
     assert "if dead_kills_val >= kills_earned:" in source, "Немає захисту від затирання kills_earned"
     assert "setInterval" not in source, "Небезпечний setInterval для nonce все ще присутній"
 
+def test_run_closed_and_abandon_immunity():
+    from src.snake.bot import _run_snake_bot_impl
+    source = inspect.getsource(_run_snake_bot_impl)
+    # 1. Navigator sendBeacon blocked
+    assert "window.navigator.sendBeacon = function" in source
+    assert "abandon" in source
+    # 2. Window pagehide listener registration blocked
+    assert "if (type === 'pagehide')" in source
+    # 3. VerifiedRun constructor wrapper and onAbandon defusal
+    assert "window.CryptoSnakeVerifiedRun = class extends OrigVerifiedRun" in source
+    # 4. Abandon method neutralized
+    assert "window.CryptoSnakeVerifiedRun.prototype.abandon = async function" in source
+    # 5. Finish method protected from abandon call
+    assert "window.CryptoSnakeVerifiedRun.prototype.finish = async function" in source
+    # 6. Chromium args include occlusion disabling
+    assert "--disable-features=CalculateNativeWinOcclusion" in source
+
+
