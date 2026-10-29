@@ -731,20 +731,19 @@ def _run_snake_bot_impl(max_runs=3, headless=False):
                                 return { ok: true };
                             };
 
-                            // Прямий fetch з cache: 'no-store', прогресивним таймаутом (18с -> 24с -> 30с) та обходом завислих HTTP/2-сокетів
+                            // Максимум 2 спроби по 16с (сумарно <=33.5с < 60с TTL сервера), щоб soft-fallback у proto.send встигав до run_closed
                             proto.request = async function(action, payload) {
                                 if (action === 'abandon') {
                                     return { ok: true };
                                 }
                                 let lastErr;
-                                const timeouts = [18000, 24000, 30000, 30000, 30000];
+                                const timeouts = (action === 'finish') ? [20000, 25000, 25000] : [16000, 16000];
                                 for (let attempt = 0; attempt < timeouts.length; attempt++) {
                                     const controller = new AbortController();
                                     const tLimit = timeouts[attempt];
                                     let timer;
                                     try {
                                         if (attempt > 0) {
-                                            // Пробуджуємо HTTP/2-пул свіжим запитом з cache-buster перед ретраєм
                                             try {
                                                 await fetch(location.pathname + '?_wake=' + Date.now() + '_' + attempt, {
                                                     method: 'HEAD',
@@ -769,7 +768,7 @@ def _run_snake_bot_impl(max_runs=3, headless=False):
                                         window.__lastVerifyError = `${action}#${payload && payload.seq}:${errCode || errStatus || err} (try ${attempt + 1})`;
                                         if (errCode === 'season_ended' || errCode === 'run_closed' || errCode === 'account_suspicious') throw err;
                                         if (errCode === 'checkpoint_sequence' && attempt >= 1) throw err;
-                                        await new Promise(r => setTimeout(r, 1500 + attempt * 1000));
+                                        await new Promise(r => setTimeout(r, 1500));
                                     } finally {
                                         clearTimeout(timer);
                                     }
