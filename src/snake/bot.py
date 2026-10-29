@@ -1071,12 +1071,13 @@ def _run_snake_bot_impl(max_runs=3, headless=False):
                                 var hy = me.pts[1];
                                 var myGuild = me.guild || 'near';
                                 var meR = me.r || (10 + Math.min(26, 0.9 * Math.sqrt(meMass)));
-                                var headingX = (me.pts.length >= 4) ? (hx - me.pts[2]) : Math.cos(me.ang || 0);
-                                var headingY = (me.pts.length >= 4) ? (hy - me.pts[3]) : Math.sin(me.ang || 0);
+                                var rawAng = (me.angle !== undefined) ? me.angle : me.ang;
+                                var headingX = (me.pts.length >= 4) ? (hx - me.pts[2]) : Math.cos(rawAng || 0);
+                                var headingY = (me.pts.length >= 4) ? (hy - me.pts[3]) : Math.sin(rawAng || 0);
                                 var hNorm = Math.hypot(headingX, headingY) || 1.0;
                                 headingX /= hNorm;
                                 headingY /= hNorm;
-                                var currentHeading = (me.ang !== undefined) ? me.ang : Math.atan2(headingY, headingX);
+                                var currentHeading = (rawAng !== undefined) ? rawAng : Math.atan2(headingY, headingX);
 
                                 // 1. Пошук монет із курсовим пріоритетом та сканер трупів (640px, NEAR x2)
                                 var foodFx = 0;
@@ -1226,6 +1227,8 @@ def _run_snake_bot_impl(max_runs=3, headless=False):
                                 var avoidFy = 0;
                                 var minEnemyDist = 9999;
                                 var minFrontEnemyDist = 9999;
+                                var minEx = hx;
+                                var minEy = hy;
                                 var nearestEnemy = null;
                                 var huntedEnemyId = null;
                                 var nowMsPre = Date.now();
@@ -1246,9 +1249,11 @@ def _run_snake_bot_impl(max_runs=3, headless=False):
                                         var odist = Math.hypot(hx - ox, hy - oy);
                                         var segCos = ((ox - hx) / (odist || 1)) * headingX + ((oy - hy) / (odist || 1)) * headingY;
 
-                                        // Завжди фіксуємо реальну дистанцію до голови й тіла ворога (крім атакованої голови huntedEnemyId на масі < 1350)
+                                        // Завжди фіксуємо реальну дистанцію та координати найближчої точки ворога
                                         if (!(p === 0 && other.id === huntedEnemyId) && odist < minEnemyDist) {
                                             minEnemyDist = odist;
+                                            minEx = ox;
+                                            minEy = oy;
                                             nearestEnemy = {
                                                 id: other.id,
                                                 name: other.name || ('Snake#' + other.id),
@@ -1393,20 +1398,20 @@ def _run_snake_bot_impl(max_runs=3, headless=False):
                                                 var hitDistSq = hitDist * hitDist;
                                                 var startP = (other.id === huntedEnemyId && meMass < 1350 && other.pts.length > 8) ? 4 : 0;
 
-                                                // Векторна екстраполяція голови будь-якого ворога (бо за головою на відстані 20px іде смертельний сегмент p=4!)
-                                                if (startP === 0 && other.pts.length >= 4) {
+                                                // Векторна екстраполяція голови ворога на променях i >= 1 (щоб не забивати фальшивим lv.4 ближній промінь i=0 на 128px)
+                                                if (i >= 1 && startP === 0 && other.pts.length >= 4) {
                                                     var ehx = other.pts[0];
                                                     var ehy = other.pts[1];
                                                     var edist = Math.hypot(ehx - hx, ehy - hy);
-                                                    if (edist < 300) {
+                                                    if (edist < 260) {
                                                         var vx = ehx - other.pts[2];
                                                         var vy = ehy - other.pts[3];
                                                         var vNorm = Math.hypot(vx, vy) || 1.0;
                                                         vx /= vNorm;
                                                         vy /= vNorm;
                                                         var appCosRay = ((hx - ehx) / (edist || 1)) * vx + ((hy - ehy) / (edist || 1)) * vy;
-                                                        if (appCosRay > -0.15) {
-                                                            var leadL = Math.max(32.0, Math.min(68.0, edist * 0.33)) * (1.0 + 0.35 * Math.max(0, appCosRay));
+                                                        if (appCosRay > 0.0) {
+                                                            var leadL = Math.max(26.0, Math.min(54.0, edist * 0.28)) * (1.0 + 0.30 * appCosRay);
                                                             var p1x = ehx + vx * (0.5 * leadL) - px;
                                                             var p1y = ehy + vy * (0.5 * leadL) - py;
                                                             var p2x = ehx + vx * leadL - px;
@@ -1429,10 +1434,14 @@ def _run_snake_bot_impl(max_runs=3, headless=False):
                                     return 0;
                                 };
 
+                                var enemyBearing = Math.atan2(minEy - hy, minEx - hx);
+                                var enemyRel = Math.atan2(Math.sin(enemyBearing - currentHeading), Math.cos(enemyBearing - currentHeading));
+
                                 var nowMs = Date.now();
                                 if (window.__evadeLockUntil && nowMs < window.__evadeLockUntil && window.__evadeLockAngle !== undefined) {
-                                    // Утримуємо замок ТІЛЬКИ якщо промінь замка чистий (<= 1), як у 5388-секундному забігу v3.4.1
-                                    if (checkRaySafety(window.__evadeLockAngle) <= 1) {
+                                    var lockEnemyClearance = Math.abs(Math.atan2(Math.sin(window.__evadeLockAngle - enemyBearing), Math.cos(window.__evadeLockAngle - enemyBearing)));
+                                    // Утримуємо замок ТІЛЬКИ якщо промінь чистий (<= 1) і НЕ веде в бік близького ворога (< 190px)
+                                    if (checkRaySafety(window.__evadeLockAngle) <= 1 && (minEnemyDist >= 190 || lockEnemyClearance >= 0.85)) {
                                         targetAngle = window.__evadeLockAngle;
                                     }
                                 }
@@ -1442,30 +1451,31 @@ def _run_snake_bot_impl(max_runs=3, headless=False):
                                 var raycastPanicked = false;
                                 var raycastDeltaDeg = 0;
                                 var raycastDanger = Math.max(primaryDanger, headingDanger);
-                                // Не тригеримо фальшивий evade lv.0, коли ворог позаду, а всі промені попереду чисті (raycastDanger === 0)
                                 var closeEmergency = (minEnemyDist < 98 && raycastDanger >= 1);
-                                // Hard Evade v3.8: екстрапольований радар + trapPenalty проти підрулювання на заблокований targetAngle + shallowPenalty
+                                // Hard Evade v3.9.6: 14.0*dScore (чистий промінь завжди виграє) + towardEnemyPen (відворот ВІД ворога) + розумний prevSign
                                 if (primaryDanger >= 2 || headingDanger >= 3 || closeEmergency) {
                                     var candidateDeltas = [0, 0.28, -0.28, 0.55, -0.55, 0.82, -0.82, 1.12, -1.12, 1.45, -1.45, 1.75, -1.75];
                                     var minCost = 999999;
                                     var safestAngle = targetAngle;
-                                    var prevSign = (window.__lastEvadeTime && (nowMs - window.__lastEvadeTime < 1800)) ? (window.__lastEvadeSign || 0) : 0;
+                                    var rawPrevSign = (window.__lastEvadeTime && (nowMs - window.__lastEvadeTime < 1500)) ? (window.__lastEvadeSign || 0) : 0;
+                                    // Якщо найближчий ворог вже знаходиться з боку rawPrevSign (|enemyRel| >= 0.30 і знаки збігаються), скидаємо prevSign щоб не крутити в ворога!
+                                    var prevSign = (rawPrevSign !== 0 && (Math.abs(enemyRel) < 0.30 || Math.sign(enemyRel) !== rawPrevSign)) ? rawPrevSign : 0;
                                     for (var delta of candidateDeltas) {
                                         var testAngle = currentHeading + delta;
                                         var dScore = checkRaySafety(testAngle);
                                         var absDelta = Math.abs(delta);
                                         var angleDiff = Math.abs(Math.atan2(Math.sin(testAngle - targetAngle), Math.cos(testAngle - targetAngle)));
-                                        // Штраф 16.0 (> 7.0*2) блокує реверси на ΔdScore<=2, але дозволяє вихід із глухого кута (7.0*4 = 28.0 > 16.0)
-                                        var flipPenalty = (prevSign !== 0 && delta !== 0 && Math.sign(delta) !== prevSign) ? (minEnemyDist < 170 ? 16.0 : 5.5) : 0.0;
-                                        // 1) Якщо ніс під загрозою (headingDanger >= 3 або closeEmergency) -> забороняємо кути < 45° (0.78 рад)
-                                        // 2) Якщо targetAngle заблокований ворогом (primaryDanger >= 3) -> забороняємо кути, ближчі ніж 45° до targetAngle (trapPenalty = 8.5)
-                                        var shallowPenalty = ((headingDanger >= 3 || closeEmergency) && absDelta < 0.78) ? 9.5 : 0.0;
-                                        var trapPenalty = (primaryDanger >= 3 && angleDiff < 0.78) ? 8.5 : ((primaryDanger === 2 && angleDiff < 0.45) ? 4.5 : 0.0);
+                                        var enemyClearance = Math.abs(Math.atan2(Math.sin(testAngle - enemyBearing), Math.cos(testAngle - enemyBearing)));
+                                        // Штраф за поворот у бік найближчого ворога (штовхає обирати сторону, протилежну від Sensevi)
+                                        var towardEnemyPen = (minEnemyDist < 220 && enemyClearance < 1.35) ? ((1.35 - enemyClearance) * 3.8) : 0.0;
+                                        // Усі вторинні штрафи сумарно < 14.0, тому чистий коридор (dScore=0) ЗАВЖДИ перемагає перешкоду (dScore>=1)
+                                        var flipPenalty = (prevSign !== 0 && delta !== 0 && Math.sign(delta) !== prevSign) ? 4.2 : 0.0;
+                                        var shallowPenalty = ((headingDanger >= 3 || closeEmergency) && absDelta < 0.75) ? 4.5 : 0.0;
+                                        var trapPenalty = (primaryDanger >= 3 && angleDiff < 0.70) ? 4.0 : ((primaryDanger === 2 && angleDiff < 0.45) ? 2.2 : 0.0);
                                         var outCos = (distFromCenter > safeRadius - 120) ? ((hx * Math.cos(testAngle) + hy * Math.sin(testAngle)) / (distFromCenter || 1)) : -1.0;
                                         var wallPenalty = (outCos > 0) ? (3.8 * outCos) : 0.0;
-                                        // turnWeight (0.26) суворо більший за goalWeight (0.18) при небезпеці, щоб не тягнуло на +16° у бік ворога
-                                        var goalWeight = (closeEmergency || raycastDanger >= 3) ? 0.18 : 0.85;
-                                        var cost = 7.0 * dScore + shallowPenalty + trapPenalty + goalWeight * angleDiff + 0.26 * absDelta + flipPenalty + wallPenalty;
+                                        var goalWeight = (closeEmergency || raycastDanger >= 3) ? 0.18 : 0.75;
+                                        var cost = 14.0 * dScore + towardEnemyPen + shallowPenalty + trapPenalty + flipPenalty + goalWeight * angleDiff + 0.22 * absDelta + wallPenalty;
                                         if (cost < minCost) {
                                             minCost = cost;
                                             safestAngle = testAngle;
