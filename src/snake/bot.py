@@ -551,8 +551,9 @@ def ensure_authenticated(sb):
 def _run_snake_bot_impl(max_runs=3, headless=False):
     binary = get_binary_path()
 
-    primary_proxy = os.getenv("RESIDENTIAL_PROXY") or os.getenv("PROXY") or ""
-    backup_proxy = os.getenv("BACKUP_PROXY") or os.getenv("SECONDARY_PROXY") or ""
+    no_proxy = os.getenv("NO_PROXY", "0").lower() in ("1", "true", "yes")
+    primary_proxy = "" if no_proxy else (os.getenv("RESIDENTIAL_PROXY") or os.getenv("PROXY") or "")
+    backup_proxy = "" if no_proxy else (os.getenv("BACKUP_PROXY") or os.getenv("SECONDARY_PROXY") or "")
 
     proxy_raw = ""
     if primary_proxy:
@@ -681,20 +682,33 @@ def _run_snake_bot_impl(max_runs=3, headless=False):
                             }
                             return s;
                         };
-                        // Захист чекпоінтів від мережевих обривів проксі/Cloudflare (до 12 спроб замість 4)
+                        // Повна заміна request() із таймаутом 45с замість рідних 8с (усуває обрив in-flight запитів і помилку checkpoint_sequence)
                         if (window.CryptoSnakeVerifiedRun && window.CryptoSnakeVerifiedRun.prototype && !window.__verifyHooked) {
-                            const origReq = window.CryptoSnakeVerifiedRun.prototype.request;
                             window.CryptoSnakeVerifiedRun.prototype.request = async function(action, payload) {
                                 let lastErr;
-                                for (let attempt = 0; attempt < 12; attempt++) {
+                                for (let attempt = 0; attempt < 8; attempt++) {
+                                    const controller = new AbortController();
+                                    let timer;
                                     try {
-                                        return await origReq.call(this, action, payload);
+                                        return await Promise.race([
+                                            this.post(action, payload, controller.signal),
+                                            new Promise((_, reject) => {
+                                                timer = setTimeout(() => {
+                                                    controller.abort();
+                                                    reject(new Error('timeout_45s'));
+                                                }, 45000);
+                                            })
+                                        ]);
                                     } catch (err) {
                                         lastErr = err;
-                                        window.__lastVerifyError = String(err && (err.message || err.status || err));
-                                        // Не ретраїмо тільки якщо сезон офіційно закрито
-                                        if (err && err.code === 'season_ended') throw err;
-                                        await new Promise(r => setTimeout(r, 2500 + attempt * 1000));
+                                        const errCode = (err && (err.code || err.message)) || '';
+                                        window.__lastVerifyError = String(errCode || (err && err.status) || err);
+                                        if (errCode === 'season_ended') throw err;
+                                        // Якщо вже виникла фатальна розсинхронізація seq, повторні спроби з тим самим seq не допоможуть
+                                        if (errCode === 'checkpoint_sequence' && attempt >= 1) throw err;
+                                        await new Promise(r => setTimeout(r, 3000 + attempt * 1500));
+                                    } finally {
+                                        clearTimeout(timer);
                                     }
                                 }
                                 throw lastErr;
