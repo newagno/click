@@ -106,14 +106,16 @@ def test_run_closed_and_abandon_immunity():
     # 1. Navigator sendBeacon blocked
     assert "window.navigator.sendBeacon = function" in source
     assert "abandon" in source
-    # 2. Window pagehide listener registration blocked
-    assert "if (type === 'pagehide')" in source
-    # 3. VerifiedRun constructor wrapper and onAbandon defusal
-    assert "window.CryptoSnakeVerifiedRun = class extends OrigVerifiedRun" in source
+    # 2. Window pagehide and visibility blocked
+    assert "pagehide" in source
+    assert "visibilitychange" in source
+    assert "Object.defineProperty(document, 'hidden'" in source
+    # 3. VerifiedRun start and onAbandon defusal
+    assert "proto.start = function" in source
     # 4. Abandon method neutralized
-    assert "window.CryptoSnakeVerifiedRun.prototype.abandon = async function" in source
-    # 5. Finish method protected from abandon call
-    assert "window.CryptoSnakeVerifiedRun.prototype.finish = async function" in source
+    assert "proto.abandon = async function" in source
+    # 5. Checkpoint timeout is 12s with rapid retry
+    assert "timeout_12s" in source
     # 6. Chromium args include occlusion disabling
     assert "--disable-features=CalculateNativeWinOcclusion" in source
 
