@@ -92,3 +92,11 @@ def test_telegram_report_new_season_record():
     )
     assert "🏆 <b>НОВИЙ РЕКОРД СЕЗОНУ!</b> Перевершено топ-1 на +3,838 монет!" in msg
     assert "Місце в рейтингу: <b>#1 (сезон)</b>" in msg
+
+def test_dead_score_does_not_overwrite_higher_telemetry():
+    from src.snake.bot import _run_snake_bot_impl
+    source = inspect.getsource(_run_snake_bot_impl)
+    assert "if dead_score >= score_earned:" in source, "Немає захисту від затирання високого in-memory score низьким dead_score"
+    assert "if dead_kills_val >= kills_earned:" in source, "Немає захисту від затирання kills_earned"
+    assert "setInterval" not in source, "Небезпечний setInterval для nonce все ще присутній"
+

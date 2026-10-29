@@ -713,19 +713,6 @@ def _run_snake_bot_impl(max_runs=3, headless=False):
                                 }
                                 throw lastErr;
                             };
-                            // Фонове оновлення WordPress nonce кожні 25 хв для багато-годинних марафонів
-                            setInterval(async () => {
-                                try {
-                                    const r = await fetch(location.pathname, { cache: 'no-store', credentials: 'same-origin' });
-                                    if (r.ok) {
-                                        const html = await r.text();
-                                        const m = html.match(/"nonce"\\s*:\\s*"([a-zA-Z0-9_-]+)"/);
-                                        if (m && m[1] && window.CryptoSnakeWP) {
-                                            window.CryptoSnakeWP.nonce = m[1];
-                                        }
-                                    }
-                                } catch (e) {}
-                            }, 25 * 60 * 1000);
                             window.__verifyHooked = true;
                         }
                         window.__radarHooked = true;
@@ -1764,10 +1751,12 @@ def _run_snake_bot_impl(max_runs=3, headless=False):
                 try:
                     stats = safe_eval(sb, """
                     return (() => {
-                        var deadCoins = document.querySelector('#cs-d-coins')?.innerText;
-                        var deadKills = document.querySelector('#cs-d-kills')?.innerText;
-                        var deadTime  = document.querySelector('#cs-d-time')?.innerText;
-                        var deadRank  = document.querySelector('#cs-d-rank')?.innerText;
+                        var deadModal = document.querySelector('#cs-dead');
+                        var deadVisible = Boolean(deadModal && !deadModal.hidden && deadModal.style.display !== 'none');
+                        var deadCoins = deadVisible ? document.querySelector('#cs-d-coins')?.innerText : null;
+                        var deadKills = deadVisible ? document.querySelector('#cs-d-kills')?.innerText : null;
+                        var deadTime  = deadVisible ? document.querySelector('#cs-d-time')?.innerText : null;
+                        var deadRank  = deadVisible ? document.querySelector('#cs-d-rank')?.innerText : null;
 
                         // Рекорд сезону (#1 podium)
                         var p1 = document.querySelector('.cs-pod[data-p="1"]');
@@ -1902,15 +1891,19 @@ def _run_snake_bot_impl(max_runs=3, headless=False):
                     print(f"[BOT] ⚠️ Вікно браузера недоступне для зчитування фінальної таблиці ({e_stats}). Формуємо звіт із телеметрії раунду.")
                     stats = {}
 
-                # Якщо екран смерті містить верифіковану кількість монет, беремо її
+                # Якщо екран смерті містить верифіковану кількість монет, оновлюємо тільки якщо вона не менша за телеметрію
                 dead_data = stats.get("dead") or {}
                 final_coins = dead_data.get("coins")
                 if final_coins and any(c.isdigit() for c in str(final_coins)):
-                    score_earned = int("".join(c for c in str(final_coins) if c.isdigit()))
+                    dead_score = int("".join(c for c in str(final_coins) if c.isdigit()))
+                    if dead_score >= score_earned:
+                        score_earned = dead_score
 
                 final_kills = dead_data.get("kills")
                 if final_kills and any(c.isdigit() for c in str(final_kills)):
-                    kills_earned = int("".join(c for c in str(final_kills) if c.isdigit()))
+                    dead_kills_val = int("".join(c for c in str(final_kills) if c.isdigit()))
+                    if dead_kills_val >= kills_earned:
+                        kills_earned = dead_kills_val
 
                 nick = stats.get("nick", "newagno")
                 season_record = stats.get("season_record") or 136162
