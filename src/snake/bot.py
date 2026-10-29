@@ -1503,22 +1503,21 @@ def _run_snake_bot_impl(max_runs=3, headless=False):
                                         var enemyClearance = Math.abs(Math.atan2(Math.sin(testAngle - enemyBearing), Math.cos(testAngle - enemyBearing)));
                                         // Штраф за поворот у бік найближчого ворога (штовхає обирати сторону, протилежну від Sensevi)
                                         var towardEnemyPen = (minEnemyDist < 220 && enemyClearance < 1.35) ? ((1.35 - enemyClearance) * 3.8) : 0.0;
-                                        // Нелінійна вага загрози: dScore=1 (288px) коштує 4.0, щоб не блокувати відворот на 47°-64° від близького ворога (<140px)
-                                        var dangerCost = (dScore === 0) ? 0.0 : ((dScore === 1) ? 4.0 : ((dScore === 2) ? 16.0 : ((dScore === 3) ? 34.0 : 60.0)));
+                                        // Усі вторинні штрафи сумарно < 14.0, тому чистий коридор (dScore=0) ЗАВЖДИ перемагає перешкоду (dScore>=1)
                                         var flipPenalty = (prevSign !== 0 && delta !== 0 && Math.sign(delta) !== prevSign) ? 4.2 : 0.0;
-                                        var shallowPenalty = ((raycastDanger >= 3 || minEnemyDist < 140 || closeEmergency) && absDelta < 0.75) ? 6.5 : 0.0;
-                                        var trapPenalty = (primaryDanger >= 3 && angleDiff < 0.75) ? 5.0 : ((primaryDanger === 2 && angleDiff < 0.45) ? 2.5 : 0.0);
+                                        var shallowPenalty = ((headingDanger >= 3 || closeEmergency) && absDelta < 0.75) ? 4.5 : 0.0;
+                                        var trapPenalty = (primaryDanger >= 3 && angleDiff < 0.70) ? 4.0 : ((primaryDanger === 2 && angleDiff < 0.45) ? 2.2 : 0.0);
                                         var outCos = (distFromCenter > safeRadius - 120) ? ((hx * Math.cos(testAngle) + hy * Math.sin(testAngle)) / (distFromCenter || 1)) : -1.0;
                                         var wallPenalty = (outCos > 0) ? (3.8 * outCos) : 0.0;
-                                        var goalWeight = (closeEmergency || raycastDanger >= 3 || minEnemyDist < 140) ? 0.15 : 0.75;
-                                        var cost = dangerCost + towardEnemyPen + shallowPenalty + trapPenalty + flipPenalty + goalWeight * angleDiff + 0.22 * absDelta + wallPenalty;
+                                        var goalWeight = (closeEmergency || raycastDanger >= 3) ? 0.18 : 0.75;
+                                        var cost = 14.0 * dScore + towardEnemyPen + shallowPenalty + trapPenalty + flipPenalty + goalWeight * angleDiff + 0.22 * absDelta + wallPenalty;
                                         if (cost < minCost) {
                                             minCost = cost;
                                             safestAngle = testAngle;
                                         }
                                     }
                                     var rawDiff = Math.atan2(Math.sin(safestAngle - currentHeading), Math.cos(safestAngle - currentHeading));
-                                    var maxTurnRad = (raycastDanger >= 4 || closeEmergency || minEnemyDist < 130 || meMass < 250) ? 1.57 : ((raycastDanger === 3) ? 1.15 : 0.78);
+                                    var maxTurnRad = (raycastDanger >= 4 || closeEmergency) ? 1.57 : ((raycastDanger === 3) ? 1.15 : 0.78);
                                     var clampedDiff = Math.max(-maxTurnRad, Math.min(maxTurnRad, rawDiff));
                                     safestAngle = currentHeading + clampedDiff;
                                     if (Math.abs(clampedDiff) >= 0.09) {
