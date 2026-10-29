@@ -731,13 +731,13 @@ def _run_snake_bot_impl(max_runs=3, headless=False):
                                 return { ok: true };
                             };
 
-                            // Максимум 2 спроби по 16с (сумарно <=33.5с < 60с TTL сервера), щоб soft-fallback у proto.send встигав до run_closed
+                            // 2 спроби по 24с (сумарно 49.5с < 60с TTL сервера) + ідемпотентна обробка checkpoint_sequence на ретраї
                             proto.request = async function(action, payload) {
                                 if (action === 'abandon') {
                                     return { ok: true };
                                 }
                                 let lastErr;
-                                const timeouts = (action === 'finish') ? [20000, 25000, 25000] : [16000, 16000];
+                                const timeouts = (action === 'finish') ? [22000, 28000, 30000] : [24000, 24000];
                                 for (let attempt = 0; attempt < timeouts.length; attempt++) {
                                     const controller = new AbortController();
                                     const tLimit = timeouts[attempt];
@@ -765,9 +765,16 @@ def _run_snake_bot_impl(max_runs=3, headless=False):
                                         lastErr = err;
                                         const errCode = String((err && (err.code || err.message)) || '');
                                         const errStatus = (err && err.status) || 0;
+                                        // Якщо try 1 перервався по клієнтському таймауту, але сервер встиг записати seq у БД,
+                                        // то try 2 з тим самим seq поверне checkpoint_sequence — вважаємо чекпоінт успішно підтвердженим
+                                        if (errCode === 'checkpoint_sequence' && attempt >= 1 && action === 'checkpoint') {
+                                            window.__lastVerifyError = '';
+                                            console.log('[BOT] Checkpoint #' + (payload && payload.seq) + ' already committed on try 1 (confirmed via retry sequence check).');
+                                            return { ok: true, recovered: true, seq: payload && payload.seq, checkpoint: (payload && payload.checkpoint) || '' };
+                                        }
                                         window.__lastVerifyError = `${action}#${payload && payload.seq}:${errCode || errStatus || err} (try ${attempt + 1})`;
                                         if (errCode === 'season_ended' || errCode === 'run_closed' || errCode === 'account_suspicious') throw err;
-                                        if (errCode === 'checkpoint_sequence' && attempt >= 1) throw err;
+                                        if (errCode === 'checkpoint_sequence') throw err;
                                         await new Promise(r => setTimeout(r, 1500));
                                     } finally {
                                         clearTimeout(timer);
