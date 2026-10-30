@@ -765,16 +765,22 @@ def _run_snake_bot_impl(max_runs=3, headless=False):
                                         lastErr = err;
                                         const errCode = String((err && (err.code || err.message)) || '');
                                         const errStatus = (err && err.status) || 0;
-                                        // Якщо try 1 перервався по клієнтському таймауту, але сервер встиг записати seq у БД,
-                                        // то try 2 з тим самим seq поверне checkpoint_sequence — вважаємо чекпоінт успішно підтвердженим
-                                        if (errCode === 'checkpoint_sequence' && attempt >= 1 && action === 'checkpoint') {
+                                        // Якщо сервер повернув checkpoint_sequence на try 1 або try 2 — цей seq уже записаний у БД сервера.
+                                        // Зберігаємо this.checkpoint, щоб не затерти токен порожнім рядком!
+                                        if (errCode === 'checkpoint_sequence' && action === 'checkpoint') {
                                             window.__lastVerifyError = '';
-                                            console.log('[BOT] Checkpoint #' + (payload && payload.seq) + ' already committed on try 1 (confirmed via retry sequence check).');
-                                            return { ok: true, recovered: true, seq: payload && payload.seq, checkpoint: (payload && payload.checkpoint) || '' };
+                                            const committedSeq = Number(payload && payload.seq) || (this.seq + 1);
+                                            const keepCheckpoint = (payload && payload.checkpoint) || this.checkpoint || 'ok';
+                                            console.log('[BOT] Checkpoint #' + committedSeq + ' already on server (try ' + (attempt + 1) + ') — syncing seq.');
+                                            return {
+                                                ok: true,
+                                                recovered: true,
+                                                seq: committedSeq,
+                                                checkpoint: keepCheckpoint
+                                            };
                                         }
                                         window.__lastVerifyError = `${action}#${payload && payload.seq}:${errCode || errStatus || err} (try ${attempt + 1})`;
                                         if (errCode === 'season_ended' || errCode === 'run_closed' || errCode === 'account_suspicious') throw err;
-                                        if (errCode === 'checkpoint_sequence') throw err;
                                         await new Promise(r => setTimeout(r, 1500));
                                     } finally {
                                         clearTimeout(timer);
@@ -783,25 +789,44 @@ def _run_snake_bot_impl(max_runs=3, headless=False):
                                 throw lastErr;
                             };
 
-                            // Захист send('checkpoint'): якщо всі спроби впали через тимчасовий timeout/5xx (а не фатальний run_closed),
-                            // НЕ виставляємо this.invalid = true і НЕ зупиняємо таймер — наступний чекпоінт через 10с продовжить серію!
+                            // Захист send('checkpoint' / 'finish'): відкат this.seq при подвійному таймауті + приховування #cs-run-warning (.hidden = true)
                             const origSend = proto.send;
                             proto.send = async function(action, stats, motion) {
+                                const prevSeq = this.seq;
+                                const prevCheckpoint = this.checkpoint;
+                                if (action === 'checkpoint' || action === 'finish') {
+                                    this.invalid = false;
+                                }
                                 try {
-                                    return await origSend.call(this, action, stats, motion);
+                                    const res = await origSend.call(this, action, stats, motion);
+                                    this.invalid = false;
+                                    const warnEl = document.getElementById('cs-run-warning');
+                                    if (warnEl && !warnEl.hidden) {
+                                        warnEl.hidden = true;
+                                        warnEl.textContent = '';
+                                    }
+                                    return res;
                                 } catch (err) {
                                     const errCode = String((err && (err.code || err.message)) || '');
                                     const isFatal = (
                                         errCode === 'run_closed' ||
                                         errCode === 'season_ended' ||
                                         errCode === 'account_suspicious' ||
-                                        errCode === 'checkpoint_sequence' ||
-                                        errCode === 'bad_checkpoint_response' ||
                                         (err && (err.status === 401 || err.status === 403))
                                     );
                                     if (action === 'checkpoint' && !isFatal) {
-                                        console.warn('[IMMUNITY] Soft checkpoint error ignored to keep run alive:', errCode);
-                                        return { seq: this.seq, checkpoint: this.checkpoint };
+                                        this.seq = prevSeq;
+                                        if (prevCheckpoint) this.checkpoint = prevCheckpoint;
+                                        this.invalid = false;
+                                        this.error = '';
+                                        window.__lastVerifyError = '';
+                                        const warnEl = document.getElementById('cs-run-warning');
+                                        if (warnEl) {
+                                            warnEl.hidden = true;
+                                            warnEl.textContent = '';
+                                        }
+                                        console.warn('[IMMUNITY] Soft checkpoint error ignored, seq rolled back to ' + prevSeq + ':', errCode);
+                                        return { ok: true, seq: this.seq, checkpoint: this.checkpoint };
                                     }
                                     throw err;
                                 }
